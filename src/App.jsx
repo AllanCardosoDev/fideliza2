@@ -15,6 +15,7 @@ import Funcionarios from "./pages/Funcionarios";
 import Relatorios from "./pages/Relatorios";
 import Agenda from "./pages/Agenda";
 import Configuracoes from "./pages/Configuracoes";
+import Cobrancas from "./pages/Cobrancas";
 import NotFound from "./pages/NotFound";
 import Modal from "./components/Modal";
 import ToastContainer from "./components/ToastContainer";
@@ -339,6 +340,7 @@ export default function App() {
               <Route path="clientes" element={<Clientes />} />
               <Route path="financeiro" element={<Financeiro />} />
               <Route path="emprestimos" element={<Emprestimos />} />
+              <Route path="cobrancas" element={<Cobrancas />} />
               <Route path="vendas" element={<Vendas />} />
               <Route path="veiculos" element={<Veiculos />} />
               <Route path="funcionarios" element={<Funcionarios />} />
