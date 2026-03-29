@@ -1,12 +1,10 @@
 // src/components/TopBar.jsx
 import React, { useContext, useState } from "react";
-import { AppContext, ThemeContext } from "../App"; // Importe ThemeContext
-import { useNavigate } from "react-router-dom";
+import { AppContext, ThemeContext } from "../App";
 
-function TopBar({ toggleSidebar, notificationsCount }) {
+function TopBar() {
   const { notifications } = useContext(AppContext);
-  const { theme, toggleTheme } = useContext(ThemeContext); // Use o contexto do tema
-  const navigate = useNavigate();
+  const { theme, toggleTheme } = useContext(ThemeContext);
   const [showNotifications, setShowNotifications] = useState(false);
 
   const unreadNotifications = notifications.filter((n) => !n.read).length;

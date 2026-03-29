@@ -3,7 +3,7 @@ import React, { useContext } from "react";
 import { AppContext } from "../App";
 // import '../styles/MobileHeader.css'; // REMOVA esta linha
 
-function MobileHeader({ toggleSidebar, onClearNotifications }) {
+function MobileHeader({ toggleSidebar }) {
   const { notifications } = useContext(AppContext);
   const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
 

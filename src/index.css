@@ -1442,3 +1442,227 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================
+   FORM ENHANCEMENTS
+   ============================================ */
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.form-row label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.form-row input,
+.form-row select,
+.form-row textarea {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-glow);
+}
+
+.form-row textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.input-error {
+  border-color: var(--red) !important;
+}
+
+.field-error {
+  color: var(--red);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Loan summary box */
+.loan-summary {
+  background: var(--gold-glow);
+  border: 1px solid rgba(240, 200, 80, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin: 8px 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.loan-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+
+.loan-summary-item span {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.loan-summary-item strong {
+  font-size: 1rem;
+  color: var(--gold);
+}
+
+/* Confirmation modal */
+.modal-confirm {
+  padding: 8px 0;
+}
+
+.modal-confirm p {
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.modal-confirm .text-dim {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* Table row states */
+.row-overdue {
+  background: rgba(231, 76, 60, 0.06);
+}
+
+.row-overdue:hover {
+  background: rgba(231, 76, 60, 0.1) !important;
+}
+
+.row-paid {
+  opacity: 0.7;
+}
+
+.row-paid td {
+  color: var(--text-dim);
+}
+
+/* Status colors */
+.status-overdue {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.status-paid {
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
+.status-renegotiated {
+  background: var(--purple-dim);
+  color: var(--purple);
+}
+
+/* Transaction amounts */
+.tx-income { color: var(--green); }
+.tx-expense { color: var(--red); }
+
+/* Text utilities */
+.text-dim { color: var(--text-dim); }
+.text-warning { color: var(--orange); }
+
+/* btn-danger */
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+
+.btn-danger:hover { opacity: 0.85; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* KPI neutral change */
+.kpi-change.neutral { color: var(--text-dim); }
+
+/* Card body */
+.card-body {
+  padding: 16px;
+}
+
+.form-group {
+  margin-bottom: 14px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-glow);
+}
+
+.form-group small {
+  display: block;
+  margin-top: 4px;
+}
+
+@media (max-width: 600px) {
+  .form-row-2 {
+    grid-template-columns: 1fr;
+  }
+}

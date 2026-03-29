@@ -1,60 +1,31 @@
 // src/pages/Agenda.jsx
-import React, { useState, useEffect } from "react";
-// import '../styles/Agenda.css'; // REMOVA esta linha
+import React, { useState, useMemo } from "react";
 
 function Agenda() {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [daysInMonth, setDaysInMonth] = useState([]);
 
-  useEffect(() => {
-    generateCalendarDays(currentDate);
-  }, [currentDate]);
-
-  const generateCalendarDays = (date) => {
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const firstDayOfMonth = new Date(year, month, 1).getDay(); // 0 = Sunday, 1 = Monday...
+  const daysInMonth = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
     const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
     const daysInPrevMonth = new Date(year, month, 0).getDate();
 
-    const newDays = [];
-
-    // Dias do mês anterior
+    const days = [];
     for (let i = firstDayOfMonth; i > 0; i--) {
-      newDays.push({
-        day: daysInPrevMonth - i + 1,
-        isCurrentMonth: false,
-        isToday: false,
-        hasEvent: false,
-      });
+      days.push({ day: daysInPrevMonth - i + 1, isCurrentMonth: false, isToday: false, hasEvent: false });
     }
-
-    // Dias do mês atual
     for (let i = 1; i <= daysInCurrentMonth; i++) {
       const dayDate = new Date(year, month, i);
       const isToday = dayDate.toDateString() === new Date().toDateString();
-      // Exemplo de evento: dia 10 e 20 de cada mês
-      const hasEvent = i === 10 || i === 20;
-      newDays.push({
-        day: i,
-        isCurrentMonth: true,
-        isToday: isToday,
-        hasEvent: hasEvent,
-      });
+      days.push({ day: i, isCurrentMonth: true, isToday, hasEvent: false });
     }
-
-    // Dias do próximo mês para preencher a última semana
-    const remainingDays = 42 - newDays.length; // 6 semanas * 7 dias
-    for (let i = 1; i <= remainingDays; i++) {
-      newDays.push({
-        day: i,
-        isCurrentMonth: false,
-        isToday: false,
-        hasEvent: false,
-      });
+    const remaining = 42 - days.length;
+    for (let i = 1; i <= remaining; i++) {
+      days.push({ day: i, isCurrentMonth: false, isToday: false, hasEvent: false });
     }
-    setDaysInMonth(newDays);
-  };
+    return days;
+  }, [currentDate]);
 
   const goToPreviousMonth = () => {
     setCurrentDate(
