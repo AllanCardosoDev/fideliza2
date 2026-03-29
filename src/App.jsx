@@ -34,8 +34,17 @@ import {
   updateLoan as apiUpdateLoan,
   deleteLoan as apiDeleteLoan,
   getSales,
+  createSale as apiCreateSale,
+  updateSale as apiUpdateSale,
+  deleteSale as apiDeleteSale,
   getVehicles,
+  createVehicle as apiCreateVehicle,
+  updateVehicle as apiUpdateVehicle,
+  deleteVehicle as apiDeleteVehicle,
   getEmployees,
+  createEmployee as apiCreateEmployee,
+  updateEmployee as apiUpdateEmployee,
+  deleteEmployee as apiDeleteEmployee,
   getNotifications,
 } from "./services/api";
 
@@ -59,13 +68,24 @@ export default function App() {
   const [authToken, setAuthToken] = useState(
     localStorage.getItem("fc_token") || "",
   );
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem("fc_current_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const userRole = currentUser?.access_level || (authToken && authToken !== "offline" ? "admin" : null);
   // isAuthenticated is derived from authToken to avoid setState-in-effect issues
   const isAuthenticated = Boolean(authToken);
   // Kept for backward-compat with components that call setIsAuthenticated
   const setIsAuthenticated = useCallback((val) => {
     if (!val) {
       setAuthToken("");
+      setCurrentUser(null);
       localStorage.removeItem("fc_token");
+      localStorage.removeItem("fc_current_user");
     }
   }, []);
   const [modal, setModal] = useState({ isOpen: false, title: "", body: null });
@@ -240,6 +260,120 @@ export default function App() {
     }
   }, [addToast]);
 
+  // Sale CRUD
+  const createSaleRecord = useCallback(async (data) => {
+    try {
+      const res = await apiCreateSale(data);
+      const created = Array.isArray(res.data) ? res.data[0] : res.data;
+      setSales((prev) => [created, ...prev]);
+      addToast("Venda registrada!", "success");
+      return created;
+    } catch (err) {
+      addToast("Erro ao registrar venda.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const editSaleRecord = useCallback(async (id, data) => {
+    try {
+      const res = await apiUpdateSale(id, data);
+      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+      setSales((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      addToast("Venda atualizada!", "success");
+      return updated;
+    } catch (err) {
+      addToast("Erro ao atualizar venda.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const removeSaleRecord = useCallback(async (id) => {
+    try {
+      await apiDeleteSale(id);
+      setSales((prev) => prev.filter((s) => s.id !== id));
+      addToast("Venda excluída.", "success");
+    } catch (err) {
+      addToast("Erro ao excluir venda.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  // Vehicle CRUD
+  const createVehicleRecord = useCallback(async (data) => {
+    try {
+      const res = await apiCreateVehicle(data);
+      const created = Array.isArray(res.data) ? res.data[0] : res.data;
+      setVehicles((prev) => [created, ...prev]);
+      addToast("Veículo cadastrado!", "success");
+      return created;
+    } catch (err) {
+      addToast("Erro ao cadastrar veículo.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const editVehicleRecord = useCallback(async (id, data) => {
+    try {
+      const res = await apiUpdateVehicle(id, data);
+      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+      setVehicles((prev) => prev.map((v) => (v.id === id ? updated : v)));
+      addToast("Veículo atualizado!", "success");
+      return updated;
+    } catch (err) {
+      addToast("Erro ao atualizar veículo.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const removeVehicleRecord = useCallback(async (id) => {
+    try {
+      await apiDeleteVehicle(id);
+      setVehicles((prev) => prev.filter((v) => v.id !== id));
+      addToast("Veículo excluído.", "success");
+    } catch (err) {
+      addToast("Erro ao excluir veículo.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  // Employee CRUD
+  const createEmployeeRecord = useCallback(async (data) => {
+    try {
+      const res = await apiCreateEmployee(data);
+      const created = Array.isArray(res.data) ? res.data[0] : res.data;
+      setEmployees((prev) => [created, ...prev]);
+      addToast("Funcionário cadastrado!", "success");
+      return created;
+    } catch (err) {
+      addToast("Erro ao cadastrar funcionário.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const editEmployeeRecord = useCallback(async (id, data) => {
+    try {
+      const res = await apiUpdateEmployee(id, data);
+      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+      setEmployees((prev) => prev.map((e) => (e.id === id ? updated : e)));
+      addToast("Funcionário atualizado!", "success");
+      return updated;
+    } catch (err) {
+      addToast("Erro ao atualizar funcionário.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
+  const removeEmployeeRecord = useCallback(async (id) => {
+    try {
+      await apiDeleteEmployee(id);
+      setEmployees((prev) => prev.filter((e) => e.id !== id));
+      addToast("Funcionário excluído.", "success");
+    } catch (err) {
+      addToast("Erro ao excluir funcionário.", "error");
+      throw err;
+    }
+  }, [addToast]);
+
   // Demo data (offline mode)
   const loadDemoData = useCallback(() => {
     const today = new Date().toISOString().split("T")[0];
@@ -295,6 +429,9 @@ export default function App() {
     setIsAuthenticated,
     authToken,
     setAuthToken,
+    currentUser,
+    setCurrentUser,
+    userRole,
     openModal,
     closeModal,
     addToast,
@@ -322,6 +459,15 @@ export default function App() {
     removeClientRecord,
     createTransactionRecord,
     removeTransactionRecord,
+    createSaleRecord,
+    editSaleRecord,
+    removeSaleRecord,
+    createVehicleRecord,
+    editVehicleRecord,
+    removeVehicleRecord,
+    createEmployeeRecord,
+    editEmployeeRecord,
+    removeEmployeeRecord,
     loadDataFromApi,
     loadDemoData,
   };

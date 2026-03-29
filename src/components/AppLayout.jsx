@@ -10,7 +10,7 @@ import TopBar from "./TopBar";
 import MobileHeader from "./MobileHeader";
 
 function AppLayout({ children }) {
-  const { setIsAuthenticated, setAuthToken, notifications, setNotifications } =
+  const { setIsAuthenticated, setAuthToken, notifications, setNotifications, userRole } =
     useContext(AppContext);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const navigate = useNavigate();
@@ -39,6 +39,7 @@ function AppLayout({ children }) {
         toggleSidebar={toggleSidebar}
         onLogout={handleLogout}
         notificationsCount={notifications.length}
+        userRole={userRole}
       />
       {isSidebarOpen && (
         <div className="sidebar-overlay" onClick={toggleSidebar}></div>
