@@ -1,0 +1,192 @@
+{
+  "clients": [
+    {
+      "id": 1,
+      "name": "João Silva",
+      "email": "joao@example.com",
+      "phone": "(11) 98765-4321",
+      "status": "active",
+      "balance": 1500.0
+    },
+    {
+      "id": 2,
+      "name": "Maria Souza",
+      "email": "maria@example.com",
+      "phone": "(21) 91234-5678",
+      "status": "pending",
+      "balance": 500.0
+    },
+    {
+      "id": 3,
+      "name": "Carlos Pereira",
+      "email": "carlos@example.com",
+      "phone": "(31) 99876-5432",
+      "status": "active",
+      "balance": 2500.0
+    },
+    {
+      "id": 4,
+      "name": "Ana Lima",
+      "email": "ana@example.com",
+      "phone": "(41) 97654-3210",
+      "status": "inactive",
+      "balance": 0.0
+    }
+  ],
+  "transactions": [
+    {
+      "id": 1,
+      "description": "Financiamento veicular - Fernanda",
+      "date": "20/03/2026",
+      "amount": 8500.0,
+      "type": "income",
+      "category": "Empréstimos"
+    },
+    {
+      "id": 2,
+      "description": "Marketing e publicidade",
+      "date": "22/03/2026",
+      "amount": 2200.0,
+      "type": "expense",
+      "category": "Marketing"
+    },
+    {
+      "id": 3,
+      "description": "Salários funcionários",
+      "date": "16/03/2026",
+      "amount": 12000.0,
+      "type": "expense",
+      "category": "Folha de Pagamento"
+    },
+    {
+      "id": 4,
+      "description": "Pagamento parcela - Ana Lima",
+      "date": "15/03/2026",
+      "amount": 950.0,
+      "type": "income",
+      "category": "Empréstimos"
+    },
+    {
+      "id": 5,
+      "description": "Manutenção estoque",
+      "date": "12/03/2026",
+      "amount": 1800.0,
+      "type": "expense",
+      "category": "Operacional"
+    },
+    {
+      "id": 6,
+      "description": "Venda de carro - Cliente X",
+      "date": "10/03/2026",
+      "amount": 15000.0,
+      "type": "income",
+      "category": "Vendas"
+    }
+  ],
+  "loans": [
+    {
+      "id": 1,
+      "client": "João Silva",
+      "value": 5000,
+      "status": "active",
+      "installments": 12,
+      "paid": 3
+    },
+    {
+      "id": 2,
+      "client": "Maria Souza",
+      "value": 2500,
+      "status": "pending",
+      "installments": 6,
+      "paid": 1
+    },
+    {
+      "id": 3,
+      "client": "Carlos Pereira",
+      "value": 10000,
+      "status": "overdue",
+      "installments": 24,
+      "paid": 8
+    }
+  ],
+  "sales": [
+    {
+      "id": 1,
+      "date": "25/03/2026",
+      "client": "João Silva",
+      "product": "Empréstimo Pessoal",
+      "qty": 1,
+      "total": 5000,
+      "status": "paid"
+    },
+    {
+      "id": 2,
+      "date": "20/03/2026",
+      "client": "Fernanda Costa",
+      "product": "Financiamento Veicular",
+      "qty": 1,
+      "total": 8500,
+      "status": "delivered"
+    },
+    {
+      "id": 3,
+      "date": "18/03/2026",
+      "client": "Pedro Alves",
+      "product": "Seguro Auto",
+      "qty": 1,
+      "total": 800,
+      "status": "pending"
+    }
+  ],
+  "vehicles": [
+    {
+      "id": 1,
+      "model": "Fiat Uno",
+      "year": 2010,
+      "price": 15000,
+      "status": "available",
+      "tags": ["Popular", "Usado"]
+    },
+    {
+      "id": 2,
+      "model": "Chevrolet Onix",
+      "year": 2022,
+      "price": 75000,
+      "status": "available",
+      "tags": ["Novo", "Compacto"]
+    },
+    {
+      "id": 3,
+      "model": "Hyundai HB20",
+      "year": 2020,
+      "price": 60000,
+      "status": "sold",
+      "tags": ["Usado", "Compacto"]
+    }
+  ],
+  "employees": [
+    {
+      "id": 1,
+      "name": "Carlos",
+      "role": "Vendedor",
+      "department": "Vendas",
+      "salary": 3000,
+      "admission": "01/01/2023",
+      "status": "active"
+    },
+    {
+      "id": 2,
+      "name": "Mariana",
+      "role": "Gerente",
+      "department": "Administrativo",
+      "salary": 5000,
+      "admission": "15/06/2022",
+      "status": "active"
+    }
+  ],
+  "notifications": [
+    { "id": 1, "message": "Nova venda registrada!", "read": false },
+    { "id": 2, "message": "Cliente João Silva adicionado.", "read": false },
+    { "id": 3, "message": "Pagamento de empréstimo recebido.", "read": true }
+  ]
+}

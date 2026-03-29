@@ -1,0 +1,9 @@
+/* src/App.css */
+#root-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* Remova qualquer background-color fixo aqui se houver,
+     o background do body já deve ser suficiente. */
+}
