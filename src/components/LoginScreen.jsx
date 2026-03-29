@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 // import '../styles/LoginScreen.css'; // REMOVA esta linha
 
 function LoginScreen() {
-  const { setIsAuthenticated, setAuthToken, loadDemoData } =
+  const { setIsAuthenticated, setAuthToken } =
     useContext(AppContext);
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin");
@@ -25,7 +25,6 @@ function LoginScreen() {
       setAuthToken("offline");
       localStorage.setItem("fc_token", "offline");
       setIsAuthenticated(true);
-      loadDemoData();
       navigate("/dashboard");
     } else {
       setError("Usuário ou senha inválidos.");

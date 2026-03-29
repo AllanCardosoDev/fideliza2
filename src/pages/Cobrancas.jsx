@@ -1,7 +1,7 @@
 // src/pages/Cobrancas.jsx
 import React, { useContext, useMemo, useState } from "react";
 import { AppContext } from "../App";
-import { fmt, fmtDate, calcPMT, buildAmortizationTable } from "../utils/helpers";
+import { fmt, fmtDate, calcPMT } from "../utils/helpers";
 
 const STATUS_OPTS = [
   { value: "", label: "Todos" },
