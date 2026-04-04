@@ -1,7 +1,63 @@
 // src/pages/Clientes.jsx
-import React, { useContext, useState, useCallback } from "react";
+import React, {
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+} from "react";
 import { AppContext } from "../App";
-import { maskCpfCnpj, maskPhone, validateCpfCnpj, fmt } from "../utils/helpers";
+import {
+  maskCpfCnpj,
+  maskPhone,
+  validateCpfCnpj,
+  fmt,
+  calcPMT,
+  getClientName,
+  fetchCNPJData,
+  fetchCEPData,
+} from "../utils/helpers";
+
+// ── Build Installments (same logic as Cobrancas/Dashboard/Emprestimos) ──────────────────
+function buildInstallments(loans, today) {
+  const items = [];
+  loans.forEach((loan) => {
+    if (!loan.start_date) return;
+    const v = Number(loan.value) || 0;
+    const rate = (Number(loan.interest_rate) || 0) / 100;
+    const n = Number(loan.installments) || 0;
+    const paid = Number(loan.paid) || 0;
+    if (!v || !n) return;
+
+    const pmt = calcPMT(v, rate, n);
+    const start = new Date(loan.start_date + "T00:00:00");
+
+    for (let i = 1; i <= n; i++) {
+      const due = new Date(start);
+      due.setMonth(due.getMonth() + (i - 1));
+      const dueDate = due.toISOString().split("T")[0];
+
+      let status;
+      if (i <= paid) {
+        status = "paid";
+      } else if (due < today) {
+        status = "overdue";
+      } else {
+        status = "due";
+      }
+
+      items.push({
+        id: `${loan.id}-${i}`,
+        loanId: loan.id,
+        clientId: loan.client_id,
+        client: getClientName(loan.client),
+        status,
+        amount: pmt,
+      });
+    }
+  });
+  return items.sort((a, b) => a.loanId - b.loanId);
+}
 
 const STATUS_OPTS = [
   { value: "active", label: "Ativo", cls: "status-active" },
@@ -10,18 +66,72 @@ const STATUS_OPTS = [
 ];
 
 const EMPTY_FORM = {
+  // Tab 1: Dados Pessoais
   name: "",
-  cpf_cnpj: "",
+  cpf: "",
+  cnpj: "",
   phone: "",
   email: "",
-  address: "",
+
+  // Tab 2: Endereço
+  cep: "",
+  street: "",
+  number: "",
+  complement: "",
+  neighborhood: "",
+  city: "",
+  state: "",
+
+  // Tab 3: Dados Adicionais
+  rg: "",
+  profession: "",
+  client_type: "autonomo",
+  facebook: "",
+  instagram: "",
+  referral: false,
+  referral_name: "",
+  referral_phone: "",
+  business_segment: "outro_segmento",
+
+  // Status: Default to "inactive" (visually represents pending approval state)
+  status: "inactive",
   notes: "",
-  status: "active",
 };
 
-function ClientForm({ initial = EMPTY_FORM, onSave, onCancel, isSaving }) {
+const CLIENT_TYPES = [
+  { value: "autonomo", label: "Autônomo" },
+  { value: "emprestimo", label: "Empréstimo" },
+  { value: "investidor", label: "Investidor" },
+  { value: "outro", label: "Outro" },
+];
+
+const BUSINESS_SEGMENTS = [
+  { value: "autonomo", label: "Autônomo" },
+  { value: "tech", label: "Tecnologia" },
+  { value: "servicos", label: "Serviços" },
+  { value: "saude", label: "Saúde" },
+  { value: "construcao", label: "Construção" },
+  { value: "transportes", label: "Transportes" },
+  { value: "financeiro", label: "Financeiro" },
+  { value: "comercio", label: "Comércio" },
+  { value: "educacao", label: "Educação" },
+  { value: "alimentacao", label: "Alimentação" },
+  { value: "agricola", label: "Agrícola" },
+  { value: "industria", label: "Indústria" },
+  { value: "outro_segmento", label: "Outro" },
+];
+
+function ClientForm({
+  initial = EMPTY_FORM,
+  currentUser,
+  onSave,
+  onCancel,
+  isSaving,
+}) {
   const [form, setForm] = useState(initial);
   const [errors, setErrors] = useState({});
+  const [activeTab, setActiveTab] = useState(0);
+  const [loading, setLoading] = useState(null);
 
   const set = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -31,104 +141,564 @@ function ClientForm({ initial = EMPTY_FORM, onSave, onCancel, isSaving }) {
   const validate = () => {
     const e = {};
     if (!form.name.trim()) e.name = "Nome é obrigatório.";
-    if (!form.cpf_cnpj.trim()) {
-      e.cpf_cnpj = "CPF/CNPJ é obrigatório.";
-    } else if (!validateCpfCnpj(form.cpf_cnpj)) {
-      e.cpf_cnpj = "CPF/CNPJ inválido.";
+
+    // CPF ou CNPJ - validar se preenchido
+    const hasCPF = form.cpf.trim();
+    const hasCNPJ = form.cnpj.trim();
+
+    if (!hasCPF && !hasCNPJ) {
+      e.cpf = "CPF ou CNPJ é obrigatório.";
+    } else {
+      if (hasCPF && !validateCpfCnpj(form.cpf)) {
+        e.cpf = "CPF inválido.";
+      }
+      if (hasCNPJ && !validateCpfCnpj(form.cnpj)) {
+        e.cnpj = "CNPJ inválido.";
+      }
     }
+
     if (!form.phone.trim()) e.phone = "Telefone é obrigatório.";
-    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       e.email = "E-mail inválido.";
     }
+    if (!form.cep.trim()) e.cep = "CEP é obrigatório.";
+    if (!form.street.trim()) e.street = "Rua é obrigatória.";
+    if (!form.number.trim()) e.number = "Número é obrigatório.";
+    if (!form.city.trim()) e.city = "Cidade é obrigatória.";
+    if (!form.state.trim()) e.state = "Estado é obrigatório.";
+    if (form.referral && !form.referral_name.trim())
+      e.referral_name = "Nome da referência é obrigatório.";
+    if (form.referral && !form.referral_phone.trim())
+      e.referral_phone = "Telefone da referência é obrigatório.";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (validate()) onSave(form);
+  const searchCPF = async () => {
+    if (!form.cpf) return;
+    setLoading("cpf");
+    const data = await fetchCNPJData(form.cpf);
+    if (data) {
+      set("name", data.name);
+      set("cep", data.address_parts.cep || "");
+      set("street", data.address_parts.street || "");
+      set("number", data.address_parts.number || "");
+      set("complement", data.address_parts.complement || "");
+      set("neighborhood", data.address_parts.neighborhood || "");
+      set("city", data.address_parts.city || "");
+      set("state", data.address_parts.state || "");
+      if (data.phone) set("phone", maskPhone(data.phone));
+    }
+    setLoading(null);
   };
 
+  const searchCNPJ = async () => {
+    if (!form.cnpj) return;
+    setLoading("cnpj");
+    const data = await fetchCNPJData(form.cnpj);
+    if (data) {
+      set("name", data.name);
+      set("cep", data.address_parts.cep || "");
+      set("street", data.address_parts.street || "");
+      set("number", data.address_parts.number || "");
+      set("complement", data.address_parts.complement || "");
+      set("neighborhood", data.address_parts.neighborhood || "");
+      set("city", data.address_parts.city || "");
+      set("state", data.address_parts.state || "");
+      if (data.phone) set("phone", maskPhone(data.phone));
+    }
+    setLoading(null);
+  };
+
+  const searchCEP = async () => {
+    if (!form.cep) return;
+    setLoading("cep");
+    const data = await fetchCEPData(form.cep);
+    if (data) {
+      set("street", data.street);
+      set("neighborhood", data.neighborhood);
+      set("city", data.city);
+      set("state", data.state);
+      set("complement", data.complement);
+    }
+    setLoading(null);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!validate()) return;
+
+    const profile = {
+      rg: form.rg,
+      cpf: form.cpf ? form.cpf.replace(/\D/g, "") : null,
+      cnpj: form.cnpj ? form.cnpj.replace(/\D/g, "") : null,
+      facebook: form.facebook,
+      referral: form.referral,
+      instagram: form.instagram,
+      profession: form.profession,
+      client_type: form.client_type,
+      address_parts: {
+        cep: form.cep.replace(/\D/g, ""),
+        city: form.city,
+        state: form.state,
+        number: form.number,
+        street: form.street,
+        complement: form.complement,
+        neighborhood: form.neighborhood,
+      },
+      referral_name: form.referral_name,
+      referral_phone: form.referral_phone,
+      business_segment: form.business_segment,
+    };
+
+    const payload = {
+      name: form.name,
+      cpf_cnpj: (form.cpf || form.cnpj).replace(/\D/g, ""),
+      phone: form.phone,
+      email: form.email,
+      address: `${form.street}, ${form.number}, ${form.city}, ${form.state}`,
+      status: form.status,
+      notes: form.notes,
+      profile: JSON.stringify(profile),
+      created_by: currentUser?.id || null,
+      owner_id: currentUser?.id || null,
+    };
+    onSave(payload);
+  };
+
+  // ── TAB 1: Dados Pessoais ──────────────────────
+  const tab1Valid =
+    form.name &&
+    (validateCpfCnpj(form.cpf) || validateCpfCnpj(form.cnpj)) &&
+    form.phone &&
+    form.email;
+
+  // ── TAB 2: Endereço ────────────────────────────
+  const tab2Valid =
+    form.cep && form.street && form.number && form.city && form.state;
+
+  // ── TAB 3: Dados Adicionais ────────────────────
+  const tab3Valid =
+    !form.referral || (form.referral_name && form.referral_phone);
+
   return (
-    <form className="modal-form" onSubmit={handleSubmit}>
-      <div className="form-row">
-        <label>Nome Completo *</label>
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => set("name", e.target.value)}
-          placeholder="Nome completo"
-          className={errors.name ? "input-error" : ""}
-        />
-        {errors.name && <span className="field-error">{errors.name}</span>}
+    <form className="modal-form modal-form-tabs" onSubmit={handleSubmit}>
+      {/* Tab Navigation */}
+      <div className="tabs-header">
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 0 ? "active" : ""} ${tab1Valid ? "valid" : ""}`}
+          onClick={() => setActiveTab(0)}
+        >
+          <span>1. Dados Pessoais</span>
+          {tab1Valid && <span className="tab-check">✓</span>}
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 1 ? "active" : ""} ${tab2Valid ? "valid" : ""}`}
+          onClick={() => setActiveTab(1)}
+        >
+          <span>2. Endereço</span>
+          {tab2Valid && <span className="tab-check">✓</span>}
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 2 ? "active" : ""} ${tab3Valid ? "valid" : ""}`}
+          onClick={() => setActiveTab(2)}
+        >
+          <span>3. Dados Adicionais</span>
+          {tab3Valid && <span className="tab-check">✓</span>}
+        </button>
       </div>
-      <div className="form-row-2">
-        <div className="form-row">
-          <label>CPF / CNPJ *</label>
-          <input
-            type="text"
-            value={form.cpf_cnpj}
-            onChange={(e) => set("cpf_cnpj", maskCpfCnpj(e.target.value))}
-            placeholder="000.000.000-00"
-            className={errors.cpf_cnpj ? "input-error" : ""}
-          />
-          {errors.cpf_cnpj && <span className="field-error">{errors.cpf_cnpj}</span>}
+
+      {/* Tab 1: Dados Pessoais */}
+      {activeTab === 0 && (
+        <div className="tab-content">
+          <div className="form-row">
+            <label>Nome Completo *</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="Nome completo"
+              className={errors.name ? "input-error" : ""}
+            />
+            {errors.name && <span className="field-error">{errors.name}</span>}
+          </div>
+
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>CPF * 🔍</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={form.cpf}
+                  onChange={(e) => set("cpf", maskCpfCnpj(e.target.value))}
+                  placeholder="000.000.000-00"
+                  className={errors.cpf && !form.cnpj ? "input-error" : ""}
+                />
+                <button
+                  type="button"
+                  onClick={searchCPF}
+                  disabled={loading === "cpf" || !form.cpf}
+                  className="btn btn-outline btn-sm"
+                  title="Buscar dados do CPF"
+                >
+                  {loading === "cpf" ? "⟳" : "🔍"}
+                </button>
+              </div>
+              {errors.cpf && !form.cnpj && (
+                <span className="field-error">{errors.cpf}</span>
+              )}
+            </div>
+
+            <div className="form-row">
+              <label>CNPJ * 🔍</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={form.cnpj}
+                  onChange={(e) => set("cnpj", maskCpfCnpj(e.target.value))}
+                  placeholder="00.000.000/0000-00"
+                  className={errors.cnpj && !form.cpf ? "input-error" : ""}
+                />
+                <button
+                  type="button"
+                  onClick={searchCNPJ}
+                  disabled={loading === "cnpj" || !form.cnpj}
+                  className="btn btn-outline btn-sm"
+                  title="Buscar dados do CNPJ"
+                >
+                  {loading === "cnpj" ? "⟳" : "🔍"}
+                </button>
+              </div>
+              {errors.cnpj && !form.cpf && (
+                <span className="field-error">{errors.cnpj}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>Telefone *</label>
+              <input
+                type="text"
+                value={form.phone}
+                onChange={(e) => set("phone", maskPhone(e.target.value))}
+                placeholder="(00) 00000-0000"
+                className={errors.phone ? "input-error" : ""}
+              />
+              {errors.phone && (
+                <span className="field-error">{errors.phone}</span>
+              )}
+            </div>
+
+            <div className="form-row">
+              <label>E-mail *</label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(e) => set("email", e.target.value)}
+                placeholder="email@exemplo.com"
+                className={errors.email ? "input-error" : ""}
+              />
+              {errors.email && (
+                <span className="field-error">{errors.email}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>RG</label>
+              <input
+                type="text"
+                value={form.rg}
+                onChange={(e) => set("rg", e.target.value)}
+                placeholder="00.000.000-0"
+              />
+            </div>
+
+            <div className="form-row">
+              <label>Profissão</label>
+              <input
+                type="text"
+                value={form.profession}
+                onChange={(e) => set("profession", e.target.value)}
+                placeholder="Sua profissão"
+              />
+            </div>
+          </div>
+
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>Tipo de Cliente</label>
+              <select
+                value={form.client_type}
+                onChange={(e) => set("client_type", e.target.value)}
+              >
+                {CLIENT_TYPES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-row">
+              <label>Segmento de Negócio</label>
+              <select
+                value={form.business_segment}
+                onChange={(e) => set("business_segment", e.target.value)}
+              >
+                {BUSINESS_SEGMENTS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
-        <div className="form-row">
-          <label>Telefone *</label>
-          <input
-            type="text"
-            value={form.phone}
-            onChange={(e) => set("phone", maskPhone(e.target.value))}
-            placeholder="(00) 00000-0000"
-            className={errors.phone ? "input-error" : ""}
-          />
-          {errors.phone && <span className="field-error">{errors.phone}</span>}
+      )}
+
+      {/* Tab 2: Endereço */}
+      {activeTab === 1 && (
+        <div className="tab-content">
+          <div className="form-row">
+            <label>CEP * 🔍</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                value={form.cep}
+                onChange={(e) => set("cep", e.target.value.replace(/\D/g, ""))}
+                placeholder="00000-000"
+                maxLength="8"
+                className={errors.cep ? "input-error" : ""}
+              />
+              <button
+                type="button"
+                onClick={searchCEP}
+                disabled={loading === "cep" || !form.cep}
+                className="btn btn-outline btn-sm"
+                title="Buscar CEP"
+              >
+                {loading === "cep" ? "⟳" : "🔍"}
+              </button>
+            </div>
+            {errors.cep && <span className="field-error">{errors.cep}</span>}
+          </div>
+
+          <div className="form-row">
+            <label>Rua / Logradouro *</label>
+            <input
+              type="text"
+              value={form.street}
+              onChange={(e) => set("street", e.target.value)}
+              placeholder="Rua, Avenida, etc"
+              className={errors.street ? "input-error" : ""}
+            />
+            {errors.street && (
+              <span className="field-error">{errors.street}</span>
+            )}
+          </div>
+
+          <div className="form-row-3">
+            <div className="form-row">
+              <label>Número *</label>
+              <input
+                type="text"
+                value={form.number}
+                onChange={(e) => set("number", e.target.value)}
+                placeholder="123"
+                className={errors.number ? "input-error" : ""}
+              />
+              {errors.number && (
+                <span className="field-error">{errors.number}</span>
+              )}
+            </div>
+
+            <div className="form-row">
+              <label>Complemento</label>
+              <input
+                type="text"
+                value={form.complement}
+                onChange={(e) => set("complement", e.target.value)}
+                placeholder="Apto, Bloco, etc"
+              />
+            </div>
+
+            <div className="form-row">
+              <label>Bairro</label>
+              <input
+                type="text"
+                value={form.neighborhood}
+                onChange={(e) => set("neighborhood", e.target.value)}
+                placeholder="Bairro"
+              />
+            </div>
+          </div>
+
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>Cidade *</label>
+              <input
+                type="text"
+                value={form.city}
+                onChange={(e) => set("city", e.target.value)}
+                placeholder="São Paulo"
+                className={errors.city ? "input-error" : ""}
+              />
+              {errors.city && (
+                <span className="field-error">{errors.city}</span>
+              )}
+            </div>
+
+            <div className="form-row">
+              <label>Estado *</label>
+              <input
+                type="text"
+                value={form.state}
+                onChange={(e) => set("state", e.target.value.toUpperCase())}
+                placeholder="SP"
+                maxLength="2"
+                className={errors.state ? "input-error" : ""}
+              />
+              {errors.state && (
+                <span className="field-error">{errors.state}</span>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="form-row">
-        <label>E-mail</label>
-        <input
-          type="email"
-          value={form.email}
-          onChange={(e) => set("email", e.target.value)}
-          placeholder="email@exemplo.com"
-          className={errors.email ? "input-error" : ""}
-        />
-        {errors.email && <span className="field-error">{errors.email}</span>}
-      </div>
-      <div className="form-row">
-        <label>Endereço</label>
-        <input
-          type="text"
-          value={form.address}
-          onChange={(e) => set("address", e.target.value)}
-          placeholder="Rua, número, bairro, cidade"
-        />
-      </div>
-      <div className="form-row">
-        <label>Status</label>
-        <select value={form.status} onChange={(e) => set("status", e.target.value)}>
-          {STATUS_OPTS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-      </div>
-      <div className="form-row">
-        <label>Observações</label>
-        <textarea
-          value={form.notes}
-          onChange={(e) => set("notes", e.target.value)}
-          placeholder="Observações sobre o cliente..."
-          rows={3}
-        />
-      </div>
+      )}
+
+      {/* Tab 3: Dados Adicionais */}
+      {activeTab === 2 && (
+        <div className="tab-content">
+          <div className="form-row-2">
+            <div className="form-row">
+              <label>Facebook</label>
+              <input
+                type="text"
+                value={form.facebook}
+                onChange={(e) => set("facebook", e.target.value)}
+                placeholder="facebook.com/usuario"
+              />
+            </div>
+
+            <div className="form-row">
+              <label>Instagram</label>
+              <input
+                type="text"
+                value={form.instagram}
+                onChange={(e) => set("instagram", e.target.value)}
+                placeholder="@usuario"
+              />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={form.referral}
+                onChange={(e) => set("referral", e.target.checked)}
+              />
+              Tem referência?
+            </label>
+          </div>
+
+          {form.referral && (
+            <>
+              <div className="form-row">
+                <label>Nome da Referência *</label>
+                <input
+                  type="text"
+                  value={form.referral_name}
+                  onChange={(e) => set("referral_name", e.target.value)}
+                  placeholder="Nome completo"
+                  className={errors.referral_name ? "input-error" : ""}
+                />
+                {errors.referral_name && (
+                  <span className="field-error">{errors.referral_name}</span>
+                )}
+              </div>
+
+              <div className="form-row">
+                <label>Telefone da Referência *</label>
+                <input
+                  type="text"
+                  value={form.referral_phone}
+                  onChange={(e) =>
+                    set("referral_phone", maskPhone(e.target.value))
+                  }
+                  placeholder="(00) 00000-0000"
+                  className={errors.referral_phone ? "input-error" : ""}
+                />
+                {errors.referral_phone && (
+                  <span className="field-error">{errors.referral_phone}</span>
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="form-row">
+            <label>Status</label>
+            <select
+              value={form.status}
+              onChange={(e) => set("status", e.target.value)}
+            >
+              {STATUS_OPTS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-row">
+            <label>Observações</label>
+            <textarea
+              value={form.notes}
+              onChange={(e) => set("notes", e.target.value)}
+              placeholder="Observações sobre o cliente..."
+              rows={3}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
       <div className="form-actions">
-        <button type="button" className="btn btn-outline btn-sm" onClick={onCancel}>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={onCancel}
+        >
           Cancelar
         </button>
-        <button type="submit" className="btn btn-gold btn-sm" disabled={isSaving}>
-          {isSaving ? "Salvando..." : "Salvar"}
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => setActiveTab(Math.max(0, activeTab - 1))}
+          disabled={activeTab === 0}
+        >
+          ← Voltar
+        </button>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => setActiveTab(Math.min(2, activeTab + 1))}
+          disabled={activeTab === 2}
+        >
+          Próximo →
+        </button>
+        <button
+          type="submit"
+          className="btn btn-gold btn-sm"
+          disabled={isSaving || loading}
+        >
+          {isSaving ? "Salvando..." : "Salvar Cliente"}
         </button>
       </div>
     </form>
@@ -144,6 +714,11 @@ function Clientes() {
     createClientRecord,
     editClientRecord,
     removeClientRecord,
+    approveClient,
+    rejectClient,
+    addToast,
+    currentUser,
+    userRole,
   } = useContext(AppContext);
 
   const [search, setSearch] = useState("");
@@ -151,7 +726,103 @@ function Clientes() {
   const [isSaving, setIsSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  const filtered = clients.filter((c) => {
+  // ── Today (fixed reference) ────────────────────────────────────────────────
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  // ── Generate all installments (same logic as Cobrancas/Dashboard/Emprestimos) ──────────────────
+  const allInstallments = useMemo(
+    () => buildInstallments(loans, today),
+    [loans, today],
+  );
+
+  // ── Auto-update client status to "overdue" if has overdue installments ─────────────────────
+  useEffect(() => {
+    const overdueLoanIds = new Set();
+    allInstallments
+      .filter((i) => i.status === "overdue")
+      .forEach((i) => {
+        overdueLoanIds.add(i.loanId);
+      });
+
+    const clientIdsWithOverdue = new Set();
+    loans.forEach((loan) => {
+      if (overdueLoanIds.has(loan.id)) {
+        clientIdsWithOverdue.add(loan.client_id);
+      }
+    });
+
+    // Update clients that should be "overdue"
+    clients.forEach((client) => {
+      if (
+        client.id &&
+        clientIdsWithOverdue.has(client.id) &&
+        client.status !== "overdue"
+      ) {
+        editClientRecord(client.id, { status: "overdue" });
+      }
+    });
+  }, [allInstallments, loans, clients, editClientRecord]);
+
+  // ── Auto-revert client status from "overdue" to "active" if no more overdue installments ─────
+  useEffect(() => {
+    clients.forEach((client) => {
+      if (client.status === "overdue") {
+        // Check if this client has any overdue installments
+        const clientHasOverdue = allInstallments.some(
+          (i) => i.status === "overdue" && i.clientId === client.id,
+        );
+
+        // If no overdue, revert to active
+        if (!clientHasOverdue) {
+          editClientRecord(client.id, { status: "active" });
+        }
+      }
+    });
+  }, [allInstallments, clients, editClientRecord]);
+
+  // Access Control: Employees see only their own clients that are approved
+  const accessibleClients = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id) {
+      // Employee sees ONLY their own clients
+      return clients.filter(
+        (c) => c.created_by === currentUser.id || c.owner_id === currentUser.id,
+      );
+    }
+    return clients; // Admin sees all
+  }, [clients, currentUser, userRole]);
+
+  // Pending clients (for admin approval)
+  const pendingClients = useMemo(() => {
+    return clients.filter((c) => c.approval_status === "pending");
+  }, [clients]);
+
+  // ── Count clients with overdue installments ──────────────────────────────────────
+  const clientsWithOverdueCount = useMemo(() => {
+    const accessibleClientIds = new Set(accessibleClients.map((c) => c.id));
+    const overdueLoanIds = new Set();
+    allInstallments
+      .filter((i) => i.status === "overdue")
+      .forEach((i) => {
+        overdueLoanIds.add(i.loanId);
+      });
+
+    const clientIds = new Set();
+    loans.forEach((loan) => {
+      if (
+        overdueLoanIds.has(loan.id) &&
+        accessibleClientIds.has(loan.client_id)
+      ) {
+        clientIds.add(loan.client_id);
+      }
+    });
+    return clientIds.size;
+  }, [allInstallments, loans, accessibleClients]);
+
+  const filtered = accessibleClients.filter((c) => {
     const matchSearch = [c.name, c.email, c.phone, c.cpf_cnpj, c.address]
       .join(" ")
       .toLowerCase()
@@ -164,16 +835,22 @@ function Clientes() {
   const clientBalance = useCallback(
     (clientId) => {
       return loans
-        .filter((l) => l.client_id === clientId && l.status !== "paid" && l.status !== "cancelled")
+        .filter(
+          (l) =>
+            l.client_id === clientId &&
+            l.status !== "paid" &&
+            l.status !== "cancelled",
+        )
         .reduce((sum, l) => sum + (Number(l.value) || 0), 0);
     },
-    [loans]
+    [loans],
   );
 
   const handleAdd = () => {
     openModal(
       "Novo Cliente",
       <ClientForm
+        currentUser={currentUser}
         onSave={async (form) => {
           setIsSaving(true);
           try {
@@ -187,20 +864,74 @@ function Clientes() {
         }}
         onCancel={closeModal}
         isSaving={isSaving}
-      />
+      />,
     );
   };
 
   const handleEdit = (client) => {
+    // Parse profile JSON if it exists
+    let profile = {};
+    if (client.profile) {
+      try {
+        profile =
+          typeof client.profile === "string"
+            ? JSON.parse(client.profile)
+            : client.profile;
+      } catch (e) {
+        profile = {};
+      }
+    }
+
+    // Extract address_parts
+    const addressParts = profile.address_parts || {};
+
     openModal(
       "Editar Cliente",
       <ClientForm
+        currentUser={currentUser}
         initial={{
+          // Etapa 1: Dados Pessoais
           name: client.name || "",
-          cpf_cnpj: client.cpf_cnpj || "",
+          cpf: profile.cpf
+            ? profile.cpf.includes(".")
+              ? profile.cpf
+              : profile.cpf.replace(
+                  /(\d{3})(\d{3})(\d{3})(\d{2})/,
+                  "$1.$2.$3-$4",
+                )
+            : "",
+          cnpj: profile.cnpj
+            ? profile.cnpj.includes("/")
+              ? profile.cnpj
+              : profile.cnpj.replace(
+                  /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,
+                  "$1.$2.$3/$4-$5",
+                )
+            : "",
           phone: client.phone || "",
           email: client.email || "",
-          address: client.address || "",
+          rg: profile.rg || "",
+          profession: profile.profession || "",
+          client_type: profile.client_type || "autonomo",
+
+          // Etapa 2: Endereço
+          cep: addressParts.cep || "",
+          street: addressParts.street || "",
+          number: addressParts.number || "",
+          complement: addressParts.complement || "",
+          neighborhood: addressParts.neighborhood || "",
+          city: addressParts.city || "",
+          state: addressParts.state || "",
+
+          // Etapa 3: Dados Adicionais
+          facebook: profile.facebook || "",
+          instagram: profile.instagram || "",
+          referral: profile.referral || false,
+          referral_name: profile.referral_name || "",
+          referral_phone: profile.referral_phone || "",
+          business_segment: profile.business_segment || "outro_segmento",
+
+          // Status e Observações
           notes: client.notes || "",
           status: client.status || "active",
         }}
@@ -217,7 +948,7 @@ function Clientes() {
         }}
         onCancel={closeModal}
         isSaving={isSaving}
-      />
+      />,
     );
   };
 
@@ -225,7 +956,9 @@ function Clientes() {
     openModal(
       "Confirmar Exclusão",
       <div className="modal-confirm">
-        <p>Tem certeza que deseja excluir <strong>{client.name}</strong>?</p>
+        <p>
+          Tem certeza que deseja excluir <strong>{client.name}</strong>?
+        </p>
         <p className="text-dim">Esta ação não pode ser desfeita.</p>
         <div className="form-actions">
           <button className="btn btn-outline btn-sm" onClick={closeModal}>
@@ -249,19 +982,22 @@ function Clientes() {
             {deletingId === client.id ? "Excluindo..." : "Excluir"}
           </button>
         </div>
-      </div>
+      </div>,
     );
   };
 
   const handleViewLoans = (client) => {
     const clientLoans = loans.filter(
-      (l) => l.client_id === client.id || l.client === client.name
+      (l) => l.client_id === client.id || l.client === client.name,
     );
     openModal(
       `Empréstimos — ${client.name}`,
       <div>
         {clientLoans.length === 0 ? (
-          <p className="text-dim" style={{ padding: "20px", textAlign: "center" }}>
+          <p
+            className="text-dim"
+            style={{ padding: "20px", textAlign: "center" }}
+          >
             Nenhum empréstimo para este cliente.
           </p>
         ) : (
@@ -283,7 +1019,13 @@ function Clientes() {
                     <td>{l.paid}</td>
                     <td>
                       <span className={`status status-${l.status}`}>
-                        {l.status === "active" ? "Ativo" : l.status === "paid" ? "Pago" : l.status === "overdue" ? "Atrasado" : l.status}
+                        {l.status === "active"
+                          ? "Ativo"
+                          : l.status === "paid"
+                            ? "Pago"
+                            : l.status === "overdue"
+                              ? "Atrasado"
+                              : l.status}
                       </span>
                     </td>
                   </tr>
@@ -293,14 +1035,19 @@ function Clientes() {
           </div>
         )}
         <div style={{ marginTop: 12, textAlign: "right" }}>
-          <button className="btn btn-outline btn-sm" onClick={closeModal}>Fechar</button>
+          <button className="btn btn-outline btn-sm" onClick={closeModal}>
+            Fechar
+          </button>
         </div>
-      </div>
+      </div>,
     );
   };
 
   const statusInfo = (status) =>
-    STATUS_OPTS.find((o) => o.value === status) || { label: status, cls: "status-inactive" };
+    STATUS_OPTS.find((o) => o.value === status) || {
+      label: status,
+      cls: "status-inactive",
+    };
 
   return (
     <div className="page active">
@@ -320,39 +1067,296 @@ function Clientes() {
       <div className="kpi-grid kpi-grid-3" style={{ marginBottom: 20 }}>
         <div className="kpi-card kpi-clients">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Total de Clientes</span>
-            <span className="kpi-value">{clients.length}</span>
+            <span className="kpi-value">{accessibleClients.length}</span>
           </div>
         </div>
         <div className="kpi-card kpi-revenue">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Clientes Ativos</span>
-            <span className="kpi-value">{clients.filter((c) => c.status === "active").length}</span>
+            <span className="kpi-value">
+              {accessibleClients.filter((c) => c.status === "active").length}
+            </span>
           </div>
         </div>
         <div className="kpi-card kpi-expense">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Inadimplentes</span>
-            <span className="kpi-value">{clients.filter((c) => c.status === "overdue").length}</span>
+            <span className="kpi-value">{clientsWithOverdueCount}</span>
           </div>
         </div>
       </div>
+
+      {/* Pending Clients Section (Admin only) */}
+      {(userRole === "admin" || userRole === "supervisor") &&
+        pendingClients.length > 0 && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 20,
+              borderColor: "var(--orange)",
+              borderLeft: "4px solid var(--orange)",
+            }}
+          >
+            <div style={{ marginBottom: 16 }}>
+              <h3 style={{ color: "var(--orange)", marginBottom: 4 }}>
+                ⏳ Clientes Pendentes de Aprovação ({pendingClients.length})
+              </h3>
+              <p className="text-dim" style={{ fontSize: "0.85rem" }}>
+                Analise os dados do cliente e valores antes de aprovar
+              </p>
+            </div>
+
+            <div className="table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>CPF / CNPJ</th>
+                    <th>Telefone</th>
+                    <th>E-mail</th>
+                    <th>Tipo</th>
+                    <th>Segmento</th>
+                    <th>Cadastrado por</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingClients.map((c) => {
+                    const profile = c.profile
+                      ? typeof c.profile === "string"
+                        ? JSON.parse(c.profile)
+                        : c.profile
+                      : {};
+                    const creatorName =
+                      clients.find(
+                        (client) => client.created_by === c.created_by,
+                      )?.name ||
+                      c.created_by ||
+                      "—";
+
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          <strong>{c.name}</strong>
+                        </td>
+                        <td>{c.cpf_cnpj || "—"}</td>
+                        <td>{c.phone || "—"}</td>
+                        <td>{c.email || "—"}</td>
+                        <td>
+                          <span
+                            className="text-dim"
+                            style={{ fontSize: "0.85rem" }}
+                          >
+                            {profile.client_type?.charAt(0).toUpperCase() +
+                              profile.client_type?.slice(1) || "—"}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className="text-dim"
+                            style={{ fontSize: "0.85rem" }}
+                          >
+                            {profile.business_segment
+                              ?.replace(/_/g, " ")
+                              .charAt(0)
+                              .toUpperCase() +
+                              profile.business_segment
+                                ?.replace(/_/g, " ")
+                                .slice(1) || "—"}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className="text-dim"
+                            style={{ fontSize: "0.85rem" }}
+                          >
+                            {creatorName}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="btn-icon"
+                            title="Ver detalhes"
+                            onClick={() => handleEdit(c)}
+                          >
+                            👁️
+                          </button>
+                          <button
+                            className="btn-icon"
+                            title="Aprovar"
+                            style={{ color: "var(--green)" }}
+                            onClick={() => {
+                              openModal(
+                                `Aprovar Cliente — ${c.name}`,
+                                <div className="modal-form">
+                                  <div
+                                    style={{
+                                      marginBottom: 16,
+                                      padding: "12px",
+                                      background: "var(--bg-primary)",
+                                      borderRadius: 8,
+                                    }}
+                                  >
+                                    <div style={{ marginBottom: 8 }}>
+                                      <span className="text-dim">Nome:</span>
+                                      <strong style={{ display: "block" }}>
+                                        {c.name}
+                                      </strong>
+                                    </div>
+                                    <div style={{ marginBottom: 8 }}>
+                                      <span className="text-dim">
+                                        CPF/CNPJ:
+                                      </span>
+                                      <strong style={{ display: "block" }}>
+                                        {c.cpf_cnpj || "—"}
+                                      </strong>
+                                    </div>
+                                    <div style={{ marginBottom: 8 }}>
+                                      <span className="text-dim">
+                                        Telefone:
+                                      </span>
+                                      <strong style={{ display: "block" }}>
+                                        {c.phone || "—"}
+                                      </strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-dim">
+                                        Cadastrado por:
+                                      </span>
+                                      <strong style={{ display: "block" }}>
+                                        {creatorName}
+                                      </strong>
+                                    </div>
+                                  </div>
+                                  <p
+                                    style={{
+                                      color: "var(--text-dim)",
+                                      marginBottom: 12,
+                                    }}
+                                  >
+                                    Confirmar aprovação deste cliente?
+                                  </p>
+                                  <div className="form-actions">
+                                    <button
+                                      className="btn btn-outline btn-sm"
+                                      onClick={closeModal}
+                                    >
+                                      Cancelar
+                                    </button>
+                                    <button
+                                      className="btn btn-gold btn-sm"
+                                      onClick={async () => {
+                                        try {
+                                          await approveClient(c.id);
+                                          closeModal();
+                                        } catch {
+                                          /* handled */
+                                        }
+                                      }}
+                                    >
+                                      ✓ Aprovar
+                                    </button>
+                                  </div>
+                                </div>,
+                              );
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className="btn-icon"
+                            title="Rejeitar"
+                            style={{ color: "var(--red)" }}
+                            onClick={() => {
+                              openModal(
+                                `Rejeitar Cliente — ${c.name}`,
+                                <div className="modal-form">
+                                  <p style={{ marginBottom: 16 }}>
+                                    Tem certeza que deseja rejeitar este
+                                    cliente?
+                                  </p>
+                                  <div className="form-actions">
+                                    <button
+                                      className="btn btn-outline btn-sm"
+                                      onClick={closeModal}
+                                    >
+                                      Cancelar
+                                    </button>
+                                    <button
+                                      className="btn btn-danger btn-sm"
+                                      onClick={async () => {
+                                        try {
+                                          await rejectClient(
+                                            c.id,
+                                            "Rejeitado pelo administrador",
+                                          );
+                                          closeModal();
+                                        } catch {
+                                          /* handled */
+                                        }
+                                      }}
+                                    >
+                                      ✗ Rejeitar
+                                    </button>
+                                  </div>
+                                </div>,
+                              );
+                            }}
+                          >
+                            ✗
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
       <div className="card">
         <div className="table-toolbar">
@@ -370,7 +1374,9 @@ function Clientes() {
           >
             <option value="">Todos os status</option>
             {STATUS_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
@@ -397,38 +1403,62 @@ function Clientes() {
                       <td>
                         <strong>{c.name}</strong>
                         {c.address && (
-                          <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>{c.address}</div>
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-dim)",
+                            }}
+                          >
+                            {c.address}
+                          </div>
                         )}
                       </td>
                       <td>{c.cpf_cnpj || "—"}</td>
                       <td>{c.phone || "—"}</td>
                       <td>{c.email || "—"}</td>
-                      <td><span className={`status ${si.cls}`}>{si.label}</span></td>
+                      <td>
+                        <span className={`status ${si.cls}`}>{si.label}</span>
+                      </td>
                       <td>{fmt(clientBalance(c.id))}</td>
                       <td>
                         <button
                           className="btn-icon"
                           title="Ver empréstimos"
                           onClick={() => handleViewLoans(c)}
-                        >💳</button>
+                        >
+                          💳
+                        </button>
                         <button
                           className="btn-icon"
                           title="Editar"
                           onClick={() => handleEdit(c)}
-                        >✏️</button>
+                        >
+                          ✏️
+                        </button>
                         <button
                           className="btn-icon"
                           title="Excluir"
                           onClick={() => handleDelete(c)}
-                        >🗑️</button>
+                        >
+                          🗑️
+                        </button>
                       </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: "center", padding: "40px", color: "var(--text-dim)" }}>
-                    {search || filterStatus ? "Nenhum cliente encontrado com os filtros aplicados." : "Nenhum cliente cadastrado. Clique em + Novo Cliente para começar."}
+                  <td
+                    colSpan="7"
+                    style={{
+                      textAlign: "center",
+                      padding: "40px",
+                      color: "var(--text-dim)",
+                    }}
+                  >
+                    {search || filterStatus
+                      ? "Nenhum cliente encontrado com os filtros aplicados."
+                      : "Nenhum cliente cadastrado. Clique em + Novo Cliente para começar."}
                   </td>
                 </tr>
               )}
@@ -437,8 +1467,15 @@ function Clientes() {
         </div>
 
         {filtered.length > 0 && (
-          <div style={{ padding: "12px 16px", color: "var(--text-dim)", fontSize: "0.8rem" }}>
-            Exibindo {filtered.length} de {clients.length} cliente{clients.length !== 1 ? "s" : ""}
+          <div
+            style={{
+              padding: "12px 16px",
+              color: "var(--text-dim)",
+              fontSize: "0.8rem",
+            }}
+          >
+            Exibindo {filtered.length} de {clients.length} cliente
+            {clients.length !== 1 ? "s" : ""}
           </div>
         )}
       </div>

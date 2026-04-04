@@ -1,7 +1,7 @@
 // src/pages/Recebimentos.jsx
 import React, { useContext, useState, useMemo, useCallback } from "react";
 import { AppContext } from "../App";
-import { fmt, fmtDate, calcPMT } from "../utils/helpers";
+import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -11,8 +11,12 @@ function calcLateFees(amount, dueDate, penaltyRate = 2, moraRate = 0.033) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const due = new Date(dueDate + "T00:00:00");
-  const daysLate = Math.max(0, Math.ceil((today - due) / (1000 * 60 * 60 * 24)));
-  if (daysLate === 0) return { daysLate: 0, penalty: 0, mora: 0, total: amount };
+  const daysLate = Math.max(
+    0,
+    Math.ceil((today - due) / (1000 * 60 * 60 * 24)),
+  );
+  if (daysLate === 0)
+    return { daysLate: 0, penalty: 0, mora: 0, total: amount };
   const penalty = amount * (penaltyRate / 100);
   const mora = amount * (moraRate / 100) * daysLate;
   return { daysLate, penalty, mora, total: amount + penalty + mora };
@@ -33,7 +37,7 @@ function buildInstallments(loans, today) {
 
     for (let i = 1; i <= n; i++) {
       const due = new Date(start);
-      due.setMonth(due.getMonth() + i);
+      due.setMonth(due.getMonth() + (i - 1));
       const dueDate = due.toISOString().split("T")[0];
 
       let status;
@@ -49,7 +53,7 @@ function buildInstallments(loans, today) {
         id: `${loan.id}-${i}`,
         loanId: loan.id,
         clientId: loan.client_id,
-        client: loan.client,
+        client: getClientName(loan.client),
         installmentNo: i,
         totalInstallments: n,
         dueDate,
@@ -71,20 +75,20 @@ function PaymentForm({ installment, settings, onSave, onCancel }) {
     installment.amount,
     installment.dueDate,
     settings.defaultPenaltyRate ?? 2,
-    settings.defaultMoraRate ?? 0.033
+    settings.defaultMoraRate ?? 0.033,
   );
 
   const [paymentAmount, setPaymentAmount] = useState(
-    total.toFixed(2).replace(".", ",")
+    total.toFixed(2).replace(".", ","),
   );
   const [paymentDate, setPaymentDate] = useState(
-    new Date().toISOString().split("T")[0]
+    new Date().toISOString().split("T")[0],
   );
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
 
   const parsedAmount = parseFloat(
-    String(paymentAmount).replace(/\./g, "").replace(",", ".") || "0"
+    String(paymentAmount).replace(/\./g, "").replace(",", ".") || "0",
   );
 
   const handleSave = () => {
@@ -114,7 +118,11 @@ function PaymentForm({ installment, settings, onSave, onCancel }) {
       <div className="form-row-2">
         <div className="form-row">
           <label>Cliente</label>
-          <input value={installment.client} readOnly style={{ background: "var(--bg-primary)" }} />
+          <input
+            value={installment.client}
+            readOnly
+            style={{ background: "var(--bg-primary)" }}
+          />
         </div>
         <div className="form-row">
           <label>Parcela</label>
@@ -156,12 +164,34 @@ function PaymentForm({ installment, settings, onSave, onCancel }) {
             marginBottom: "12px",
           }}
         >
-          <strong style={{ color: "var(--red)" }}>⚠ Parcela em atraso: {daysLate} dia{daysLate !== 1 ? "s" : ""}</strong>
-          <div style={{ marginTop: 6, fontSize: "0.85rem", display: "grid", gap: 4 }}>
-            <span>Multa ({settings.defaultPenaltyRate ?? 2}%): <strong>{fmt(penalty)}</strong></span>
-            <span>Mora ({settings.defaultMoraRate ?? 0.033}%/dia × {daysLate}d): <strong>{fmt(mora)}</strong></span>
-            <span style={{ borderTop: "1px solid var(--red)", paddingTop: 4, marginTop: 2 }}>
-              Total com encargos: <strong style={{ color: "var(--red)" }}>{fmt(total)}</strong>
+          <strong style={{ color: "var(--red)" }}>
+            ⚠ Parcela em atraso: {daysLate} dia{daysLate !== 1 ? "s" : ""}
+          </strong>
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: "0.85rem",
+              display: "grid",
+              gap: 4,
+            }}
+          >
+            <span>
+              Multa ({settings.defaultPenaltyRate ?? 2}%):{" "}
+              <strong>{fmt(penalty)}</strong>
+            </span>
+            <span>
+              Mora ({settings.defaultMoraRate ?? 0.033}%/dia × {daysLate}d):{" "}
+              <strong>{fmt(mora)}</strong>
+            </span>
+            <span
+              style={{
+                borderTop: "1px solid var(--red)",
+                paddingTop: 4,
+                marginTop: 2,
+              }}
+            >
+              Total com encargos:{" "}
+              <strong style={{ color: "var(--red)" }}>{fmt(total)}</strong>
             </span>
           </div>
         </div>
@@ -198,10 +228,22 @@ function PaymentForm({ installment, settings, onSave, onCancel }) {
         />
       </div>
 
-      {error && <p style={{ color: "var(--red)", fontSize: "0.85rem" }}>{error}</p>}
+      {error && (
+        <p style={{ color: "var(--red)", fontSize: "0.85rem" }}>{error}</p>
+      )}
 
-      <div className="modal-footer" style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
-        <button className="btn btn-outline btn-sm" onClick={onCancel}>Cancelar</button>
+      <div
+        className="modal-footer"
+        style={{
+          display: "flex",
+          gap: 10,
+          justifyContent: "flex-end",
+          marginTop: 16,
+        }}
+      >
+        <button className="btn btn-outline btn-sm" onClick={onCancel}>
+          Cancelar
+        </button>
         <button className="btn btn-gold btn-sm" onClick={handleSave}>
           ✓ Registrar Pagamento
         </button>
@@ -219,12 +261,16 @@ function ReceiptModal({ payment, settings, onClose }) {
 
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text(settings.companyName || "Fideliza Cred", w / 2, 18, { align: "center" });
+    doc.text(settings.companyName || "Fideliza Cred", w / 2, 18, {
+      align: "center",
+    });
 
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
-    if (settings.companyAddress) doc.text(settings.companyAddress, w / 2, 24, { align: "center" });
-    if (settings.companyPhone) doc.text(`Tel: ${settings.companyPhone}`, w / 2, 29, { align: "center" });
+    if (settings.companyAddress)
+      doc.text(settings.companyAddress, w / 2, 24, { align: "center" });
+    if (settings.companyPhone)
+      doc.text(`Tel: ${settings.companyPhone}`, w / 2, 29, { align: "center" });
 
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
@@ -245,7 +291,10 @@ function ReceiptModal({ payment, settings, onClose }) {
         ["Valor Original:", fmt(payment.originalAmount)],
         ...(payment.daysLate > 0
           ? [
-              ["Dias em atraso:", `${payment.daysLate} dia${payment.daysLate !== 1 ? "s" : ""}`],
+              [
+                "Dias em atraso:",
+                `${payment.daysLate} dia${payment.daysLate !== 1 ? "s" : ""}`,
+              ],
               ["Multa:", fmt(payment.penaltyAmount)],
               ["Juros de mora:", fmt(payment.moraAmount)],
               ["Total com encargos:", fmt(payment.totalWithFees)],
@@ -267,11 +316,11 @@ function ReceiptModal({ payment, settings, onClose }) {
       `Emitido em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`,
       w / 2,
       doc.internal.pageSize.getHeight() - 8,
-      { align: "center" }
+      { align: "center" },
     );
 
     doc.save(
-      `recibo-${payment.client.replace(/\s+/g, "-")}-parcela${payment.installmentNo}-${payment.paymentDate}.pdf`
+      `recibo-${payment.client.replace(/\s+/g, "-")}-parcela${payment.installmentNo}-${payment.paymentDate}.pdf`,
     );
   };
 
@@ -291,7 +340,9 @@ function ReceiptModal({ payment, settings, onClose }) {
             {settings.companyName || "Fideliza Cred"}
           </strong>
           <br />
-          <span style={{ fontSize: "0.8rem", color: "var(--text-dim)" }}>RECIBO DE PAGAMENTO</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--text-dim)" }}>
+            RECIBO DE PAGAMENTO
+          </span>
         </div>
         {[
           ["Cliente", payment.client],
@@ -347,14 +398,8 @@ const FILTER_STATUS = [
 ];
 
 function Recebimentos() {
-  const {
-    loans,
-    editLoan,
-    addToast,
-    openModal,
-    closeModal,
-    settings,
-  } = useContext(AppContext);
+  const { loans, clients, editLoan, addToast, openModal, closeModal, settings, currentUser, userRole } =
+    useContext(AppContext);
 
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -371,13 +416,27 @@ function Recebimentos() {
   });
   const [activeTab, setActiveTab] = useState("installments");
 
+  // Access Control: Employees see only their own loans
+  const accessibleLoans = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id && clients) {
+      const myClientIds = clients
+        .filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id)
+        .map(c => c.id);
+      return loans.filter(l => myClientIds.includes(l.client_id));
+    }
+    return loans;
+  }, [loans, clients, currentUser, userRole]);
+
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
   }, []);
 
-  const allInstallments = useMemo(() => buildInstallments(loans, today), [loans, today]);
+  const allInstallments = useMemo(
+    () => buildInstallments(accessibleLoans, today),
+    [accessibleLoans, today],
+  );
 
   const filtered = useMemo(() => {
     return allInstallments.filter((inst) => {
@@ -424,11 +483,18 @@ function Recebimentos() {
               // Mark installment as paid in loan
               const loan = loans.find((l) => l.id === inst.loanId);
               if (!loan) throw new Error("Empréstimo não encontrado.");
-              const newPaid = Math.max(Number(loan.paid) || 0, inst.installmentNo);
+              const newPaid = Math.max(
+                Number(loan.paid) || 0,
+                inst.installmentNo,
+              );
               const allPaid = newPaid >= Number(loan.installments);
               await editLoan(loan.id, {
                 paid: newPaid,
-                status: allPaid ? "paid" : loan.status === "overdue" && !allPaid ? "active" : loan.status,
+                status: allPaid
+                  ? "paid"
+                  : loan.status === "overdue" && !allPaid
+                    ? "active"
+                    : loan.status,
               });
 
               // Save payment record
@@ -452,8 +518,16 @@ function Recebimentos() {
               const updated = [paymentRecord, ...payments];
               savePayments(updated);
 
+              // Dispatch event to notify Financeiro
+              window.dispatchEvent(
+                new CustomEvent("paymentsUpdated", { detail: updated }),
+              );
+
               closeModal();
-              addToast(`Pagamento registrado! Parcela ${inst.installmentNo} de ${inst.client} marcada como paga.`, "success");
+              addToast(
+                `Pagamento registrado! Parcela ${inst.installmentNo} de ${inst.client} marcada como paga.`,
+                "success",
+              );
 
               // Show receipt option
               setTimeout(() => {
@@ -463,18 +537,30 @@ function Recebimentos() {
                     payment={paymentRecord}
                     settings={settings}
                     onClose={closeModal}
-                  />
+                  />,
                 );
               }, 300);
             } catch (err) {
-              addToast("Erro ao registrar pagamento: " + (err.message || ""), "error");
+              addToast(
+                "Erro ao registrar pagamento: " + (err.message || ""),
+                "error",
+              );
             }
           }}
           onCancel={closeModal}
-        />
+        />,
       );
     },
-    [loans, editLoan, payments, savePayments, openModal, closeModal, addToast, settings]
+    [
+      loans,
+      editLoan,
+      payments,
+      savePayments,
+      openModal,
+      closeModal,
+      addToast,
+      settings,
+    ],
   );
 
   const handleReversePayment = useCallback(
@@ -492,7 +578,14 @@ function Recebimentos() {
           <p style={{ color: "var(--red)", fontSize: "0.85rem", marginTop: 8 }}>
             ⚠ Esta ação reverterá o pagamento e marcará a parcela como não paga.
           </p>
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              justifyContent: "flex-end",
+              marginTop: 16,
+            }}
+          >
             <button className="btn btn-outline btn-sm" onClick={closeModal}>
               Cancelar
             </button>
@@ -505,11 +598,20 @@ function Recebimentos() {
                     const newPaid = Math.max(0, (Number(loan.paid) || 0) - 1);
                     await editLoan(loan.id, {
                       paid: newPaid,
-                      status: newPaid < Number(loan.installments) ? "active" : loan.status,
+                      status:
+                        newPaid < Number(loan.installments)
+                          ? "active"
+                          : loan.status,
                     });
                   }
                   const updated = payments.filter((p) => p.id !== payment.id);
                   savePayments(updated);
+
+                  // Dispatch event to notify Financeiro
+                  window.dispatchEvent(
+                    new CustomEvent("paymentsUpdated", { detail: updated }),
+                  );
+
                   closeModal();
                   addToast("Pagamento estornado com sucesso.", "success");
                 } catch (err) {
@@ -520,20 +622,24 @@ function Recebimentos() {
               Confirmar Estorno
             </button>
           </div>
-        </div>
+        </div>,
       );
     },
-    [loans, editLoan, payments, savePayments, openModal, closeModal, addToast]
+    [loans, editLoan, payments, savePayments, openModal, closeModal, addToast],
   );
 
   const handleViewReceipt = useCallback(
     (payment) => {
       openModal(
         "Recibo de Pagamento",
-        <ReceiptModal payment={payment} settings={settings} onClose={closeModal} />
+        <ReceiptModal
+          payment={payment}
+          settings={settings}
+          onClose={closeModal}
+        />,
       );
     },
-    [openModal, closeModal, settings]
+    [openModal, closeModal, settings],
   );
 
   const filteredPayments = useMemo(() => {
@@ -548,6 +654,55 @@ function Recebimentos() {
     });
   }, [payments, search, filterDateFrom, filterDateTo]);
 
+  // ── Sync missing paid installments ───────────────────────────────────────
+  React.useEffect(() => {
+    const paidInstallments = allInstallments.filter((i) => i.status === "paid");
+
+    if (paidInstallments.length === 0) return;
+
+    // Check which paid installments don't have payment records
+    const missingPayments = paidInstallments.filter((inst) => {
+      return !payments.some(
+        (p) =>
+          p.loanId === inst.loanId && p.installmentNo === inst.installmentNo,
+      );
+    });
+
+    if (missingPayments.length === 0) return;
+
+    // Create payment records for missing paid installments
+    const newPayments = missingPayments.map((inst) => ({
+      id: `sync-${inst.loanId}-${inst.installmentNo}-${Date.now()}`,
+      loanId: inst.loanId,
+      clientId: inst.clientId,
+      client: inst.client,
+      installmentNo: inst.installmentNo,
+      totalInstallments: inst.totalInstallments,
+      dueDate: inst.dueDate,
+      paymentDate: inst.dueDate, // Use due date as payment date (default assumption)
+      originalAmount: inst.amount,
+      amountPaid: inst.amount,
+      daysLate: 0,
+      penaltyAmount: 0,
+      moraAmount: 0,
+      totalWithFees: inst.amount,
+      notes: "[Sincronizado automaticamente]",
+    }));
+
+    const updated = [...payments, ...newPayments];
+    savePayments(updated);
+
+    // Dispatch event to notify Financeiro
+    window.dispatchEvent(
+      new CustomEvent("paymentsUpdated", { detail: updated }),
+    );
+
+    addToast(
+      `✅ ${newPayments.length} parcela(s) sincronizada(s) como pagamentos.`,
+      "success",
+    );
+  }, [allInstallments, payments, savePayments, addToast]);
+
   return (
     <div className="page active">
       <div className="page-header">
@@ -559,42 +714,82 @@ function Recebimentos() {
 
       {/* KPI Cards */}
       <div className="kpi-grid">
-        <div className="kpi-card kpi-expense animate-in" style={{ "--delay": 1 }}>
+        <div
+          className="kpi-card kpi-expense animate-in"
+          style={{ "--delay": 1 }}
+        >
           <div className="kpi-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Em Atraso</span>
             <span className="kpi-value">{fmt(kpis.overdueAmount)}</span>
-            <span className="kpi-change negative">{kpis.overdueCount} parcela{kpis.overdueCount !== 1 ? "s" : ""}</span>
+            <span className="kpi-change negative">
+              {kpis.overdueCount} parcela{kpis.overdueCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
 
-        <div className="kpi-card kpi-profit animate-in" style={{ "--delay": 2 }}>
+        <div
+          className="kpi-card kpi-profit animate-in"
+          style={{ "--delay": 2 }}
+        >
           <div className="kpi-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" />
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">A Vencer</span>
             <span className="kpi-value">{fmt(kpis.dueAmount)}</span>
-            <span className="kpi-change neutral">{kpis.dueCount} parcela{kpis.dueCount !== 1 ? "s" : ""}</span>
+            <span className="kpi-change neutral">
+              {kpis.dueCount} parcela{kpis.dueCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
 
-        <div className="kpi-card kpi-revenue animate-in" style={{ "--delay": 3 }}>
+        <div
+          className="kpi-card kpi-revenue animate-in"
+          style={{ "--delay": 3 }}
+        >
           <div className="kpi-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <polyline points="20 6 9 17 4 12" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Total Recebido</span>
             <span className="kpi-value">{fmt(kpis.totalReceived)}</span>
-            <span className="kpi-change positive">{kpis.paidCount} parcela{kpis.paidCount !== 1 ? "s" : ""} quitada{kpis.paidCount !== 1 ? "s" : ""}</span>
+            <span className="kpi-change positive">
+              {kpis.paidCount} parcela{kpis.paidCount !== 1 ? "s" : ""} quitada
+              {kpis.paidCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
       </div>
@@ -617,9 +812,24 @@ function Recebimentos() {
 
       {/* Filters */}
       <div className="card" style={{ padding: "16px", marginBottom: 16 }}>
-        <div className="filter-bar" style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div
+          className="filter-bar"
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            alignItems: "flex-end",
+          }}
+        >
           <div style={{ flex: "1 1 200px" }}>
-            <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 4 }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.78rem",
+                color: "var(--text-dim)",
+                marginBottom: 4,
+              }}
+            >
               Buscar
             </label>
             <input
@@ -631,7 +841,14 @@ function Recebimentos() {
           </div>
           {activeTab === "installments" && (
             <div style={{ flex: "0 0 140px" }}>
-              <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 4 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "0.78rem",
+                  color: "var(--text-dim)",
+                  marginBottom: 4,
+                }}
+              >
                 Status
               </label>
               <select
@@ -648,7 +865,14 @@ function Recebimentos() {
             </div>
           )}
           <div style={{ flex: "0 0 140px" }}>
-            <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 4 }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.78rem",
+                color: "var(--text-dim)",
+                marginBottom: 4,
+              }}
+            >
               De
             </label>
             <input
@@ -658,7 +882,14 @@ function Recebimentos() {
             />
           </div>
           <div style={{ flex: "0 0 140px" }}>
-            <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 4 }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.78rem",
+                color: "var(--text-dim)",
+                marginBottom: 4,
+              }}
+            >
               Até
             </label>
             <input
@@ -690,10 +921,10 @@ function Recebimentos() {
               {filterStatus === "overdue"
                 ? "Vencidas"
                 : filterStatus === "due"
-                ? "A Vencer"
-                : filterStatus === "paid"
-                ? "Pagas"
-                : ""}
+                  ? "A Vencer"
+                  : filterStatus === "paid"
+                    ? "Pagas"
+                    : ""}
               <span
                 style={{
                   marginLeft: 8,
@@ -724,7 +955,7 @@ function Recebimentos() {
                     const today0 = new Date();
                     today0.setHours(0, 0, 0, 0);
                     const diff = Math.ceil(
-                      (inst.due - today0) / (1000 * 60 * 60 * 24)
+                      (inst.due - today0) / (1000 * 60 * 60 * 24),
                     );
                     return (
                       <tr
@@ -733,8 +964,8 @@ function Recebimentos() {
                           inst.status === "overdue"
                             ? "row-overdue"
                             : inst.status === "paid"
-                            ? "row-paid"
-                            : ""
+                              ? "row-paid"
+                              : ""
                         }
                       >
                         <td>
@@ -783,15 +1014,15 @@ function Recebimentos() {
                               inst.status === "overdue"
                                 ? "status-overdue"
                                 : inst.status === "paid"
-                                ? "status-active"
-                                : "status-pending"
+                                  ? "status-active"
+                                  : "status-pending"
                             }`}
                           >
                             {inst.status === "overdue"
                               ? "Vencida"
                               : inst.status === "paid"
-                              ? "Paga"
-                              : "A vencer"}
+                                ? "Paga"
+                                : "A vencer"}
                           </span>
                         </td>
                         <td>
@@ -827,7 +1058,9 @@ function Recebimentos() {
                         color: "var(--text-dim)",
                       }}
                     >
-                      <div style={{ fontSize: "2rem", marginBottom: 8 }}>📭</div>
+                      <div style={{ fontSize: "2rem", marginBottom: 8 }}>
+                        📭
+                      </div>
                       Nenhuma parcela encontrada.
                     </td>
                   </tr>
@@ -867,7 +1100,8 @@ function Recebimentos() {
                   fontWeight: 400,
                 }}
               >
-                ({filteredPayments.length} registro{filteredPayments.length !== 1 ? "s" : ""})
+                ({filteredPayments.length} registro
+                {filteredPayments.length !== 1 ? "s" : ""})
               </span>
             </h3>
           </div>
@@ -903,11 +1137,19 @@ function Recebimentos() {
                       </td>
                       <td>
                         {p.daysLate > 0 ? (
-                          <span style={{ color: "var(--red)", fontSize: "0.82rem" }}>
-                            {p.daysLate}d (+{fmt(p.penaltyAmount + p.moraAmount)})
+                          <span
+                            style={{ color: "var(--red)", fontSize: "0.82rem" }}
+                          >
+                            {p.daysLate}d (+
+                            {fmt(p.penaltyAmount + p.moraAmount)})
                           </span>
                         ) : (
-                          <span style={{ color: "var(--green)", fontSize: "0.82rem" }}>
+                          <span
+                            style={{
+                              color: "var(--green)",
+                              fontSize: "0.82rem",
+                            }}
+                          >
                             Em dia
                           </span>
                         )}
@@ -940,7 +1182,9 @@ function Recebimentos() {
                         color: "var(--text-dim)",
                       }}
                     >
-                      <div style={{ fontSize: "2rem", marginBottom: 8 }}>📭</div>
+                      <div style={{ fontSize: "2rem", marginBottom: 8 }}>
+                        📭
+                      </div>
                       Nenhum pagamento registrado.
                     </td>
                   </tr>
@@ -954,7 +1198,12 @@ function Recebimentos() {
                     </td>
                     <td className="tx-income">
                       <strong>
-                        {fmt(filteredPayments.reduce((s, p) => s + (p.amountPaid || 0), 0))}
+                        {fmt(
+                          filteredPayments.reduce(
+                            (s, p) => s + (p.amountPaid || 0),
+                            0,
+                          ),
+                        )}
                       </strong>
                     </td>
                     <td colSpan="2" />

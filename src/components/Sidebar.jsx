@@ -8,10 +8,17 @@ function Sidebar({
   toggleSidebar,
   onLogout,
   notificationsCount,
+  pendingRequisitionsCount,
+  pendingClientsCount,
   userRole,
 }) {
   const { clients, currentUser } = useContext(AppContext);
   const isEmployee = userRole === "employee";
+
+  // Access Control: Show only employee's clients in sidebar badge
+  const visibleClientsCount = isEmployee && currentUser?.id
+    ? clients.filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id).length
+    : clients.length;
 
   const handleLinkClick = () => {
     if (window.innerWidth <= 768) {
@@ -66,7 +73,14 @@ function Sidebar({
             <path d="M16 3.13a4 4 0 0 1 0 7.75" />
           </svg>
           Clientes{" "}
-          <span className="nav-badge">{clients ? clients.length : 0}</span>
+          {(visibleClientsCount > 0 || pendingClientsCount > 0) && (
+            <span 
+              className="nav-badge" 
+              style={pendingClientsCount > 0 ? { backgroundColor: "var(--orange)" } : {}}
+            >
+              {pendingClientsCount > 0 ? pendingClientsCount : visibleClientsCount}
+            </span>
+          )}
         </NavLink>
 
         {!isEmployee && <div className="nav-section-label">Financeiro</div>}
@@ -86,9 +100,23 @@ function Sidebar({
             <line x1="2" y1="10" x2="22" y2="10" />
           </svg>
           Empréstimos{" "}
-          {notificationsCount > 0 && (
-            <span className="nav-badge">{notificationsCount}</span>
+          {(notificationsCount > 0 || pendingRequisitionsCount > 0) && (
+            <span 
+              className="nav-badge" 
+              style={pendingRequisitionsCount > 0 ? { backgroundColor: "var(--orange)" } : {}}
+            >
+              {pendingRequisitionsCount > 0 ? pendingRequisitionsCount : notificationsCount}
+            </span>
           )}
+        </NavLink>
+        <NavLink to="/simulador" className="nav-item" onClick={handleLinkClick}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="7" height="7" />
+            <rect x="14" y="3" width="7" height="7" />
+            <rect x="6" y="14" width="12" height="7" rx="1" />
+            <polyline points="9 8 12 5 15 8"/>
+          </svg>
+          Simulador
         </NavLink>
         <NavLink to="/cobrancas" className="nav-item" onClick={handleLinkClick}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -104,24 +132,8 @@ function Sidebar({
           </svg>
           Recebimentos
         </NavLink>
-        <NavLink to="/vendas" className="nav-item" onClick={handleLinkClick}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-          </svg>
-          Vendas
-        </NavLink>
 
-        <div className="nav-section-label">Operacional</div>
-        <NavLink to="/veiculos" className="nav-item" onClick={handleLinkClick}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M5 17h14" />
-            <path d="M6 17l-1-5h14l-1 5" />
-            <path d="M8 12l1-4h6l1 4" />
-            <circle cx="7.5" cy="17" r="1.5" />
-            <circle cx="16.5" cy="17" r="1.5" />
-          </svg>
-          Veículos
-        </NavLink>
+        <div className="nav-section-label">Gestão</div>
         {!isEmployee && (
           <NavLink to="/funcionarios" className="nav-item" onClick={handleLinkClick}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

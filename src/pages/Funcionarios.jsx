@@ -26,6 +26,7 @@ const STATUS_OPTS = [
 
 const ACCESS_OPTS = [
   { value: "employee", label: "Funcionário" },
+  { value: "supervisor", label: "Supervisor" },
   { value: "admin", label: "Administrador" },
 ];
 
@@ -425,8 +426,8 @@ function Funcionarios() {
                     <td>{emp.salary != null && emp.salary !== "" ? fmt(emp.salary) : "—"}</td>
                     <td>{fmtDate(emp.admission)}</td>
                     <td>
-                      <span className={`status ${emp.access_level === "admin" ? "status-active" : ""}`}>
-                        {emp.access_level === "admin" ? "Admin" : "Funcionário"}
+                      <span className={`status ${emp.access_level === "admin" ? "status-active" : emp.access_level === "supervisor" ? "status-pending" : ""}`}>
+                        {emp.access_level === "admin" ? "Admin" : emp.access_level === "supervisor" ? "Supervisor" : "Funcionário"}
                       </span>
                     </td>
                     <td>

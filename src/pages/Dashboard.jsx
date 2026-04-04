@@ -1,46 +1,161 @@
 // src/pages/Dashboard.jsx
 import React, { useContext, useMemo } from "react";
-import { AppContext } from "../App";
+import { AppContext, ThemeContext } from "../App";
 import { useNavigate } from "react-router-dom";
-import { fmt, fmtDate, calcPMT } from "../utils/helpers";
+import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
+
+// ── Build Installments (same logic as Cobrancas) ────────────────────
+function buildInstallments(loans, today) {
+  const items = [];
+  loans.forEach((loan) => {
+    if (!loan.start_date) return;
+    const v = Number(loan.value) || 0;
+    const rate = (Number(loan.interest_rate) || 0) / 100;
+    const n = Number(loan.installments) || 0;
+    const paid = Number(loan.paid) || 0;
+    if (!v || !n) return;
+
+    const pmt = calcPMT(v, rate, n);
+    const start = new Date(loan.start_date + "T00:00:00");
+
+    for (let i = 1; i <= n; i++) {
+      const due = new Date(start);
+      due.setMonth(due.getMonth() + (i - 1));
+      const dueDate = due.toISOString().split("T")[0];
+
+      let status;
+      if (i <= paid) {
+        status = "paid";
+      } else if (due < today) {
+        status = "overdue";
+      } else {
+        status = "due";
+      }
+
+      items.push({
+        id: `${loan.id}-${i}`,
+        loanId: loan.id,
+        client: getClientName(loan.client),
+        installmentNo: i,
+        totalInstallments: n,
+        dueDate,
+        due,
+        amount: pmt,
+        status,
+      });
+    }
+  });
+  return items.sort((a, b) => a.due - b.due);
+}
+
 import {
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
   Tooltip,
   Legend,
-  ResponsiveContainer,
-} from "recharts";
+} from "chart.js";
+import { Line, Bar } from "react-chartjs-2";
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+);
 
 function Dashboard() {
-  const { clients, transactions, loans } = useContext(AppContext);
+  const { clients, transactions, loans, currentUser, userRole } =
+    useContext(AppContext);
+  const { theme } = useContext(ThemeContext);
   const navigate = useNavigate();
+
+  const getCss = (v) =>
+    getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  // ── Today (fixed reference) ────────────────────────────────────────────────
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  // Access Control: Employees see only their own clients and loans
+  const accessibleClients = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id) {
+      return clients.filter(
+        (c) => c.created_by === currentUser.id || c.owner_id === currentUser.id,
+      );
+    }
+    return clients;
+  }, [clients, currentUser, userRole]);
+
+  const accessibleLoans = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id && clients) {
+      const myClientIds = clients
+        .filter(
+          (c) =>
+            c.created_by === currentUser.id || c.owner_id === currentUser.id,
+        )
+        .map((c) => c.id);
+      return loans.filter((l) => myClientIds.includes(l.client_id));
+    }
+    return loans;
+  }, [loans, clients, currentUser, userRole]);
+
+  // ── Generate all installments (same logic as Cobranças) ──────────────────
+  const allInstallments = useMemo(
+    () => buildInstallments(accessibleLoans, today),
+    [accessibleLoans, today],
+  );
 
   // ── KPIs calculated from real data ───────────────────────────────────────
   const kpis = useMemo(() => {
-    const activeLoans = loans.filter((l) => l.status === "active" || l.status === "overdue");
-    const totalEmprestado = activeLoans.reduce((s, l) => s + (Number(l.value) || 0), 0);
+    // Using same logic as Cobranças
+    const paid = allInstallments.filter((i) => i.status === "paid");
+    const totalRecebido = paid.reduce((s, i) => s + i.amount, 0);
 
-    const totalRecebido = loans.reduce((s, l) => {
-      const pmt = calcPMT(Number(l.value) || 0, (Number(l.interest_rate) || 0) / 100, Number(l.installments) || 1);
-      return s + pmt * (Number(l.paid) || 0);
-    }, 0);
+    // Total Emprestado = TODOS os empréstimos (ativos + inativos + pagos)
+    const totalEmprestado = accessibleLoans.reduce(
+      (s, l) => s + (Number(l.value) || 0),
+      0,
+    );
 
-    const totalAReceber = loans.reduce((s, l) => {
+    const activeLoans = accessibleLoans.filter(
+      (l) => l.status === "active" || l.status === "overdue",
+    );
+
+    const totalAReceber = accessibleLoans.reduce((s, l) => {
       if (l.status === "paid" || l.status === "cancelled") return s;
-      const pmt = calcPMT(Number(l.value) || 0, (Number(l.interest_rate) || 0) / 100, Number(l.installments) || 1);
+      const pmt = calcPMT(
+        Number(l.value) || 0,
+        (Number(l.interest_rate) || 0) / 100,
+        Number(l.installments) || 1,
+      );
       const remaining = (Number(l.installments) || 0) - (Number(l.paid) || 0);
       return s + pmt * Math.max(remaining, 0);
     }, 0);
 
-    const overdueLoans = loans.filter((l) => l.status === "overdue");
-    const totalEmAtraso = overdueLoans.reduce((s, l) => s + (Number(l.value) || 0), 0);
+    // ✅ Total Em Atraso = Soma apenas das parcelas vencidas e não pagas
+    const overdue = allInstallments.filter((i) => i.status === "overdue");
+    const totalEmAtraso = overdue.reduce((s, i) => s + i.amount, 0);
 
-    const activeClients = clients.filter((c) => c.status === "active" || c.status === "overdue").length;
+    const activeClients = accessibleClients.filter(
+      (c) => c.status === "active" || c.status === "overdue",
+    ).length;
+
+    console.log(
+      "[Dashboard] Total Recebido (from paid installments):",
+      totalRecebido,
+    );
 
     return {
       totalEmprestado,
@@ -49,86 +164,138 @@ function Dashboard() {
       totalEmAtraso,
       activeClients,
       activeLoansCount: activeLoans.length,
-      overdueCount: overdueLoans.length,
+      overdueCount: overdue.length,
+      paidInstallmentsCount: paid.length,
     };
-  }, [loans, clients]);
+  }, [accessibleLoans, accessibleClients, allInstallments]);
 
   // ── Top debtors ───────────────────────────────────────────────────────────
   const topDebtors = useMemo(() => {
     const byClient = {};
-    loans.forEach((l) => {
+    accessibleLoans.forEach((l) => {
       if (l.status === "paid" || l.status === "cancelled") return;
-      const key = l.client;
-      const pmt = calcPMT(Number(l.value) || 0, (Number(l.interest_rate) || 0) / 100, Number(l.installments) || 1);
-      const remaining = ((Number(l.installments) || 0) - (Number(l.paid) || 0)) * pmt;
+      const key = getClientName(l.client);
+      const pmt = calcPMT(
+        Number(l.value) || 0,
+        (Number(l.interest_rate) || 0) / 100,
+        Number(l.installments) || 1,
+      );
+      const remaining =
+        ((Number(l.installments) || 0) - (Number(l.paid) || 0)) * pmt;
       byClient[key] = (byClient[key] || 0) + remaining;
     });
     return Object.entries(byClient)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
-  }, [loans]);
+  }, [accessibleLoans]);
 
   // ── Upcoming due installments ─────────────────────────────────────────────
   const upcomingDues = useMemo(() => {
     const items = [];
     const today = new Date();
-    loans.forEach((l) => {
+    accessibleLoans.forEach((l) => {
       if (l.status === "paid" || l.status === "cancelled") return;
       if (!l.start_date) return;
       const nextInstallment = (Number(l.paid) || 0) + 1;
       if (nextInstallment > Number(l.installments)) return;
       const due = new Date(l.start_date + "T00:00:00");
-      due.setMonth(due.getMonth() + nextInstallment);
+      due.setMonth(due.getMonth() + (nextInstallment - 1));
       const diff = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
-      const pmt = calcPMT(Number(l.value) || 0, (Number(l.interest_rate) || 0) / 100, Number(l.installments) || 1);
+      const pmt = calcPMT(
+        Number(l.value) || 0,
+        (Number(l.interest_rate) || 0) / 100,
+        Number(l.installments) || 1,
+      );
       items.push({ loan: l, due, diff, pmt, installmentNo: nextInstallment });
     });
     return items.sort((a, b) => a.due - b.due).slice(0, 8);
-  }, [loans]);
+  }, [accessibleLoans]);
 
-  // ── Chart data: last 6 months ────────────────────────────────────────────
-  const monthlyChartData = useMemo(() => {
+  // ── Chart: Monthly evolution of loans and receipts ────────────────────────
+  const chartData = useMemo(() => {
     const months = [];
     const now = new Date();
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const label = d.toLocaleDateString("pt-BR", { month: "short" });
-
-      const emprestado = loans
-        .filter((l) => l.start_date && l.start_date.startsWith(key))
-        .reduce((s, l) => s + (Number(l.value) || 0), 0);
-
-      // Paid installments from loans that fall in this month
-      const recebidoEmprestimos = loans.reduce((sum, l) => {
-        if (!l.start_date) return sum;
-        const pmt = calcPMT(Number(l.value) || 0, (Number(l.interest_rate) || 0) / 100, Number(l.installments) || 1);
-        const paid = Number(l.paid) || 0;
-        const start = new Date(l.start_date + "T00:00:00");
-        for (let j = 1; j <= paid; j++) {
-          const installmentDate = new Date(start);
-          installmentDate.setMonth(installmentDate.getMonth() + j);
-          const dueKey = `${installmentDate.getFullYear()}-${String(installmentDate.getMonth() + 1).padStart(2, "0")}`;
-          if (dueKey === key) sum += pmt;
-        }
-        return sum;
-      }, 0);
-
-      // Income transactions for this month
-      const recebidoTransacoes = transactions
-        .filter((t) => t.type === "income" && t.date && t.date.startsWith(key))
-        .reduce((s, t) => s + (Number(t.amount) || 0), 0);
-
-      const recebido = recebidoEmprestimos + recebidoTransacoes;
-
-      const inadimplente = loans
-        .filter((l) => l.status === "overdue" && l.start_date && l.start_date.startsWith(key))
-        .reduce((s, l) => s + (Number(l.value) || 0), 0);
-
-      months.push({ mes: label, Emprestado: emprestado, Recebido: recebido, Inadimplência: inadimplente });
+      months.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        label: d.toLocaleDateString("pt-BR", { month: "short" }),
+      });
     }
-    return months;
-  }, [loans, transactions]);
+    const loansByMonth = months.map(({ key }) =>
+      accessibleLoans
+        .filter((l) => l.start_date && l.start_date.startsWith(key))
+        .reduce((s, l) => s + (Number(l.value) || 0), 0),
+    );
+    const receivedByMonth = months.map(({ key }) =>
+      allInstallments
+        .filter(
+          (i) => i.status === "paid" && i.dueDate && i.dueDate.startsWith(key),
+        )
+        .reduce((s, i) => s + i.amount, 0),
+    );
+    return {
+      labels: months.map((m) => m.label),
+      datasets: [
+        {
+          label: "Emprestado",
+          data: loansByMonth,
+          borderColor: getCss("--gold"),
+          backgroundColor: "rgba(255, 165, 0, 0.1)",
+          pointBackgroundColor: getCss("--gold"),
+          pointBorderColor: getCss("--bg-primary"),
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          tension: 0.4,
+          fill: true,
+        },
+        {
+          label: "Recebido",
+          data: receivedByMonth,
+          borderColor: getCss("--green"),
+          backgroundColor: "rgba(34, 197, 94, 0.1)",
+          pointBackgroundColor: getCss("--green"),
+          pointBorderColor: getCss("--bg-primary"),
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          tension: 0.4,
+          fill: true,
+        },
+      ],
+    };
+  }, [accessibleLoans, allInstallments, theme]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const chartOptions = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "top", labels: { color: getCss("--text") } },
+        tooltip: {
+          backgroundColor: getCss("--bg-secondary"),
+          titleColor: getCss("--text"),
+          bodyColor: getCss("--text-dim"),
+          borderColor: getCss("--border"),
+          borderWidth: 1,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: getCss("--text-dim") },
+          grid: { color: `${getCss("--border")}40` },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: getCss("--text-dim"), callback: (v) => fmt(v) },
+          grid: { color: `${getCss("--border")}40` },
+        },
+      },
+    }),
+    [theme],
+  ); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="page active">
@@ -138,7 +305,10 @@ function Dashboard() {
           <p className="page-desc">Visão geral do seu negócio</p>
         </div>
         <div className="header-actions">
-          <button className="btn btn-outline btn-sm" onClick={() => navigate("/emprestimos")}>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => navigate("/emprestimos")}
+          >
             + Novo Empréstimo
           </button>
         </div>
@@ -146,22 +316,47 @@ function Dashboard() {
 
       {/* KPI Cards */}
       <div className="kpi-grid">
-        <div className="kpi-card kpi-revenue animate-in" style={{ "--delay": 1 }}>
+        <div
+          className="kpi-card kpi-revenue animate-in"
+          style={{ "--delay": 1 }}
+        >
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
             </svg>
           </div>
           <div className="kpi-info">
-            <span className="kpi-label">Total Emprestado (Ativo)</span>
+            <span className="kpi-label">Total Emprestado</span>
             <span className="kpi-value">{fmt(kpis.totalEmprestado)}</span>
-            <span className="kpi-change positive">{kpis.activeLoansCount} empréstimo{kpis.activeLoansCount !== 1 ? "s" : ""} ativo{kpis.activeLoansCount !== 1 ? "s" : ""}</span>
+            <span className="kpi-change positive">
+              {kpis.activeLoansCount} empréstimo
+              {kpis.activeLoansCount !== 1 ? "s" : ""} ativo
+              {kpis.activeLoansCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
 
-        <div className="kpi-card kpi-profit animate-in" style={{ "--delay": 2 }}>
+        <div
+          className="kpi-card kpi-profit animate-in"
+          style={{ "--delay": 2 }}
+        >
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
             </svg>
           </div>
@@ -172,115 +367,155 @@ function Dashboard() {
           </div>
         </div>
 
-        <div className="kpi-card kpi-clients animate-in" style={{ "--delay": 3 }}>
+        <div
+          className="kpi-card kpi-clients animate-in"
+          style={{ "--delay": 3 }}
+        >
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <line x1="12" y1="1" x2="12" y2="23" />
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Total Recebido</span>
             <span className="kpi-value">{fmt(kpis.totalRecebido)}</span>
-            <span className="kpi-change positive">Parcelas quitadas</span>
+            <span className="kpi-change positive">
+              {kpis.paidInstallmentsCount} parcela
+              {kpis.paidInstallmentsCount !== 1 ? "s" : ""} quitada
+              {kpis.paidInstallmentsCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
 
-        <div className="kpi-card kpi-expense animate-in" style={{ "--delay": 4 }}>
+        <div
+          className="kpi-card kpi-expense animate-in"
+          style={{ "--delay": 4 }}
+        >
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           </div>
           <div className="kpi-info">
             <span className="kpi-label">Em Atraso</span>
             <span className="kpi-value">{fmt(kpis.totalEmAtraso)}</span>
-            <span className="kpi-change negative">{kpis.overdueCount} empréstimo{kpis.overdueCount !== 1 ? "s" : ""} inadimplente{kpis.overdueCount !== 1 ? "s" : ""}</span>
+            <span className="kpi-change negative">
+              {kpis.overdueCount} empréstimo{kpis.overdueCount !== 1 ? "s" : ""}{" "}
+              inadimplente{kpis.overdueCount !== 1 ? "s" : ""}
+            </span>
           </div>
         </div>
       </div>
 
       <div className="dashboard-grid">
-        {/* Bar Chart: Monthly Loans */}
+        {/* Chart */}
         <div className="card chart-card animate-in" style={{ "--delay": 5 }}>
           <div className="card-header">
-            <h3>Empréstimos Concedidos (6 meses)</h3>
-            <button className="btn-link" onClick={() => navigate("/relatorios")}>Ver Relatórios</button>
+            <h3>Evolução Mensal</h3>
+            <button
+              className="btn-link"
+              onClick={() => navigate("/relatorios")}
+            >
+              Ver Relatórios
+            </button>
           </div>
           <div className="chart-container">
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={monthlyChartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="mes" tick={{ fill: "var(--text-dim)", fontSize: 12 }} />
-                <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
-                <Tooltip formatter={(value) => [fmt(value), ""]} contentStyle={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }} />
-                <Legend />
-                <Bar dataKey="Emprestado" fill="var(--gold)" radius={[4,4,0,0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Line data={chartData} options={chartOptions} />
           </div>
         </div>
 
-        {/* Line Chart: Received vs Overdue */}
-        <div className="card chart-card animate-in" style={{ "--delay": 5 }}>
-          <div className="card-header">
-            <h3>Recebimentos vs Inadimplência (6 meses)</h3>
-            <button className="btn-link" onClick={() => navigate("/recebimentos")}>Ver Recebimentos</button>
-          </div>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={monthlyChartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="mes" tick={{ fill: "var(--text-dim)", fontSize: 12 }} />
-                <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
-                <Tooltip formatter={(value) => [fmt(value), ""]} contentStyle={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }} />
-                <Legend />
-                <Line type="monotone" dataKey="Recebido" stroke="var(--green)" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="Inadimplência" stroke="var(--red)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      <div className="dashboard-grid">
         {/* Upcoming dues */}
         <div className="card animate-in" style={{ "--delay": 6 }}>
           <div className="card-header">
-            <h3>Próximos Vencimentos (7 dias)</h3>
-            <button className="btn-link" onClick={() => navigate("/emprestimos")}>Ver Todos</button>
+            <h3>Próximos Vencimentos</h3>
+            <button
+              className="btn-link"
+              onClick={() => navigate("/emprestimos")}
+            >
+              Ver Todos
+            </button>
           </div>
           <div className="transactions-list">
             {upcomingDues.length > 0 ? (
               upcomingDues.map(({ loan, due, diff, pmt, installmentNo }) => (
-                <div key={`${loan.id}-${installmentNo}`} className="transaction-row">
-                  <div className={`tx-icon ${diff < 0 ? "tx-expense" : diff <= 3 ? "tx-expense" : "tx-income"}`}>
+                <div
+                  key={`${loan.id}-${installmentNo}`}
+                  className="transaction-row"
+                >
+                  <div
+                    className={`tx-icon ${diff < 0 ? "tx-expense" : diff <= 3 ? "tx-expense" : "tx-income"}`}
+                  >
                     {diff < 0 ? "⚠" : diff <= 3 ? "!" : "📅"}
                   </div>
                   <div className="tx-info">
                     <div className="tx-desc">{loan.client}</div>
-                    <div className="tx-category">Parcela {installmentNo}/{loan.installments}</div>
+                    <div className="tx-category">
+                      Parcela {installmentNo}/{loan.installments}
+                    </div>
                   </div>
                   <div className="tx-amount" style={{ textAlign: "right" }}>
                     <div>{fmt(pmt)}</div>
-                    <div style={{ fontSize: "0.75rem", color: diff < 0 ? "var(--red)" : diff <= 3 ? "var(--orange)" : "var(--text-dim)" }}>
-                      {diff < 0 ? `${Math.abs(diff)}d atrasado` : diff === 0 ? "Hoje" : `em ${diff}d — ${fmtDate(due.toISOString().split("T")[0])}`}
+                    <div
+                      style={{
+                        fontSize: "0.75rem",
+                        color:
+                          diff < 0
+                            ? "var(--red)"
+                            : diff <= 3
+                              ? "var(--orange)"
+                              : "var(--text-dim)",
+                      }}
+                    >
+                      {diff < 0
+                        ? `${Math.abs(diff)}d atrasado`
+                        : diff === 0
+                          ? "Hoje"
+                          : `em ${diff}d — ${fmtDate(due.toISOString().split("T")[0])}`}
                     </div>
                   </div>
                 </div>
               ))
             ) : (
-              <p style={{ padding: "20px", textAlign: "center", color: "var(--text-dim)" }}>
-                Nenhum vencimento nos próximos 7 dias.
+              <p
+                style={{
+                  padding: "20px",
+                  textAlign: "center",
+                  color: "var(--text-dim)",
+                }}
+              >
+                Nenhum vencimento próximo.
               </p>
             )}
           </div>
         </div>
+      </div>
 
+      {/* Summary row */}
+      <div className="dashboard-grid" style={{ marginTop: 0 }}>
         {/* Top debtors */}
         <div className="card animate-in" style={{ "--delay": 7 }}>
           <div className="card-header">
-            <h3>Maiores Devedores (Top 5)</h3>
-            <button className="btn-link" onClick={() => navigate("/clientes")}>Ver Clientes</button>
+            <h3>Maiores Devedores</h3>
+            <button className="btn-link" onClick={() => navigate("/clientes")}>
+              Ver Clientes
+            </button>
           </div>
           <div className="table-wrapper">
             <table className="data-table">
@@ -302,35 +537,65 @@ function Dashboard() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan="3" style={{ textAlign: "center", padding: "20px", color: "var(--text-dim)" }}>Nenhum devedor ativo.</td>
+                    <td
+                      colSpan="3"
+                      style={{
+                        textAlign: "center",
+                        padding: "20px",
+                        color: "var(--text-dim)",
+                      }}
+                    >
+                      Nenhum devedor ativo.
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
-      </div>
 
-      {/* Quick stats */}
-      <div className="dashboard-grid" style={{ marginTop: 0 }}>
+        {/* Quick stats */}
         <div className="card animate-in" style={{ "--delay": 8 }}>
           <div className="card-header">
             <h3>Resumo Geral</h3>
           </div>
           <div style={{ padding: "8px 0" }}>
             {[
-              { label: "Clientes Ativos", value: kpis.activeClients, icon: "👥" },
-              { label: "Empréstimos Ativos", value: kpis.activeLoansCount, icon: "💳" },
+              {
+                label: "Clientes Ativos",
+                value: kpis.activeClients,
+                icon: "👥",
+              },
+              {
+                label: "Empréstimos Ativos",
+                value: kpis.activeLoansCount,
+                icon: "💳",
+              },
               { label: "Em Atraso", value: kpis.overdueCount, icon: "⚠️" },
-              { label: "Total de Empréstimos", value: loans.length, icon: "📋" },
-              { label: "Total de Clientes", value: clients.length, icon: "🧑‍💼" },
+              {
+                label: "Total de Empréstimos",
+                value: accessibleLoans.length,
+                icon: "📋",
+              },
+              {
+                label: "Total de Clientes",
+                value: accessibleClients.length,
+                icon: "🧑‍💼",
+              },
             ].map((item) => (
               <div key={item.label} className="transaction-row">
-                <div className="tx-icon" style={{ background: "var(--bg-primary)" }}>{item.icon}</div>
+                <div
+                  className="tx-icon"
+                  style={{ background: "var(--bg-primary)" }}
+                >
+                  {item.icon}
+                </div>
                 <div className="tx-info">
                   <div className="tx-desc">{item.label}</div>
                 </div>
-                <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>{item.value}</div>
+                <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>
+                  {item.value}
+                </div>
               </div>
             ))}
           </div>

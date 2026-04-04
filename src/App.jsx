@@ -1,5 +1,11 @@
 // src/App.jsx
-import React, { useState, useEffect, createContext, useContext, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  createContext,
+  useContext,
+  useCallback,
+} from "react";
 import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import "./index.css";
 
@@ -9,14 +15,13 @@ import Dashboard from "./pages/Dashboard";
 import Clientes from "./pages/Clientes";
 import Financeiro from "./pages/Financeiro";
 import Emprestimos from "./pages/Emprestimos";
-import Vendas from "./pages/Vendas";
-import Veiculos from "./pages/Veiculos";
 import Funcionarios from "./pages/Funcionarios";
 import Relatorios from "./pages/Relatorios";
 import Agenda from "./pages/Agenda";
 import Configuracoes from "./pages/Configuracoes";
 import Cobrancas from "./pages/Cobrancas";
 import Recebimentos from "./pages/Recebimentos";
+import Simulador from "./pages/Simulador";
 import NotFound from "./pages/NotFound";
 import Modal from "./components/Modal";
 import ToastContainer from "./components/ToastContainer";
@@ -33,19 +38,16 @@ import {
   createLoan as apiCreateLoan,
   updateLoan as apiUpdateLoan,
   deleteLoan as apiDeleteLoan,
-  getSales,
-  createSale as apiCreateSale,
-  updateSale as apiUpdateSale,
-  deleteSale as apiDeleteSale,
-  getVehicles,
-  createVehicle as apiCreateVehicle,
-  updateVehicle as apiUpdateVehicle,
-  deleteVehicle as apiDeleteVehicle,
   getEmployees,
   createEmployee as apiCreateEmployee,
   updateEmployee as apiUpdateEmployee,
   deleteEmployee as apiDeleteEmployee,
   getNotifications,
+  getClientAssignments,
+  getEmployeeClients,
+  assignClientToEmployee,
+  updateClientAssignment,
+  deleteClientAssignment,
 } from "./services/api";
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -76,7 +78,9 @@ export default function App() {
       return null;
     }
   });
-  const userRole = currentUser?.access_level || (authToken && authToken !== "offline" ? "admin" : null);
+  const userRole =
+    currentUser?.access_level ||
+    (authToken && authToken !== "offline" ? "admin" : null);
   // isAuthenticated is derived from authToken to avoid setState-in-effect issues
   const isAuthenticated = Boolean(authToken);
   // Kept for backward-compat with components that call setIsAuthenticated
@@ -94,8 +98,6 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loans, setLoans] = useState([]);
-  const [sales, setSales] = useState([]);
-  const [vehicles, setVehicles] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [notifications, setNotifications] = useState([]);
 
@@ -136,261 +138,510 @@ export default function App() {
     });
   }, []);
 
+  // Caixa (Cash Management)
+  const [caixa, setCaixa] = useState(() => {
+    try {
+      const saved = localStorage.getItem("fc_caixa");
+      return saved ? JSON.parse(saved) : 1000000;
+    } catch {
+      return 1000000;
+    }
+  });
+
+  const saveCaixa = useCallback((newCaixa) => {
+    const caixaAmount = Math.max(0, Number(newCaixa) || 0);
+    setCaixa(caixaAmount);
+    localStorage.setItem("fc_caixa", JSON.stringify(caixaAmount));
+  }, []);
+
+  // Payments (from Recebimentos)
+  const [payments, setPayments] = useState(() => {
+    try {
+      const saved = localStorage.getItem("fc_payments");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const handlePaymentsUpdated = (event) => {
+      const updated = event.detail || [];
+      setPayments(updated);
+    };
+    window.addEventListener("paymentsUpdated", handlePaymentsUpdated);
+    return () =>
+      window.removeEventListener("paymentsUpdated", handlePaymentsUpdated);
+  }, []);
+
   // Theme
   const getInitialTheme = () => {
     const saved = localStorage.getItem("theme");
     if (saved) return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   };
   const [theme, setTheme] = useState(getInitialTheme);
   useEffect(() => {
     document.body.className = theme === "dark" ? "dark-theme" : "light-theme";
     localStorage.setItem("theme", theme);
   }, [theme]);
-  const toggleTheme = () => setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  const toggleTheme = () =>
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
 
   const addToast = useCallback((message, type = "success") => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    setTimeout(
+      () => setToasts((prev) => prev.filter((t) => t.id !== id)),
+      4000,
+    );
   }, []);
 
   const openModal = (title, bodyComponent) =>
     setModal({ isOpen: true, title, body: bodyComponent });
   const closeModal = () => setModal({ isOpen: false, title: "", body: null });
 
+  // Helper function to map loan from API format to app format
+  const mapLoanFromApi = useCallback(
+    (loan) => ({
+      ...loan,
+      client: loan.clients?.name || loan.client || "",
+    }),
+    [],
+  );
+
   // Loan CRUD
-  const createLoan = useCallback(async (loanData) => {
-    try {
-      const res = await apiCreateLoan(loanData);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setLoans((prev) => [created, ...prev]);
-      addToast("Empréstimo salvo!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao salvar empréstimo.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const createLoan = useCallback(
+    async (loanData) => {
+      try {
+        // IMPORTANT: Employee can ONLY create loans as "pending" requisitions
+        // The status field is hidden from employees in the form
+        // This ensures they cannot accidentally or intentionally create active loans
+        const submissionData = { ...loanData };
+        let toastMessage = "Empréstimo salvo!";
+        
+        if (userRole === "employee") {
+          // EMPLOYEE: ALWAYS force pending status - this is non-negotiable
+          submissionData.status = "pending";
+          toastMessage = "Requisição enviada para aprovação do Admin!";
+        } else {
+          // ADMIN/SUPERVISOR: Use provided status or default to active
+          if (!submissionData.status) {
+            submissionData.status = "active";
+          }
+        }
+        
+        const res = await apiCreateLoan(submissionData);
+        const created = Array.isArray(res.data) ? res.data[0] : res.data;
+        const mapped = mapLoanFromApi(created);
+        setLoans((prev) => [mapped, ...prev]);
+        addToast(toastMessage, "success");
+        return mapped;
+      } catch (err) {
+        addToast("Erro ao salvar empréstimo.", "error");
+        throw err;
+      }
+    },
+    [addToast, mapLoanFromApi, userRole],
+  );
 
-  const editLoan = useCallback(async (id, loanData) => {
-    try {
-      const res = await apiUpdateLoan(id, loanData);
-      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
-      setLoans((prev) => prev.map((l) => (l.id === id ? updated : l)));
-      addToast("Empréstimo atualizado!", "success");
-      return updated;
-    } catch (err) {
-      addToast("Erro ao atualizar empréstimo.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const editLoan = useCallback(
+    async (id, loanData) => {
+      try {
+        const res = await apiUpdateLoan(id, loanData);
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        const mapped = mapLoanFromApi(updated);
+        setLoans((prev) => prev.map((l) => (l.id === id ? mapped : l)));
+        addToast("Empréstimo atualizado!", "success");
+        return mapped;
+      } catch (err) {
+        addToast("Erro ao atualizar empréstimo.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
-  const removeLoan = useCallback(async (id) => {
-    try {
-      await apiDeleteLoan(id);
-      setLoans((prev) => prev.filter((l) => l.id !== id));
-      addToast("Empréstimo excluído.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir empréstimo.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const removeLoan = useCallback(
+    async (id) => {
+      try {
+        await apiDeleteLoan(id);
+        setLoans((prev) => prev.filter((l) => l.id !== id));
+        addToast("Empréstimo excluído.", "success");
+      } catch (err) {
+        addToast("Erro ao excluir empréstimo.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
+
+  // Loan Requisition Approval/Rejection (Admin only)
+  const approveLoan = useCallback(
+    async (id) => {
+      try {
+        const loan = loans.find(l => l.id === id);
+        if (!loan) throw new Error("Empréstimo não encontrado");
+        
+        // Approve the loan - only change status
+        const res = await apiUpdateLoan(id, { status: "active" });
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        const mapped = mapLoanFromApi(updated);
+        setLoans((prev) => prev.map((l) => (l.id === id ? mapped : l)));
+        
+        // Auto-approve the associated client (also set status to active)
+        if (loan.client_id && clients.find(c => c.id === loan.client_id && c.approval_status === "pending")) {
+          try {
+            await apiUpdateClient(loan.client_id, { 
+              approval_status: "approved",
+              status: "active"
+            });
+            setClients((prev) => prev.map((c) => 
+              c.id === loan.client_id ? { ...c, approval_status: "approved", status: "active" } : c
+            ));
+          } catch (clientErr) {
+            console.warn("Failed to auto-approve client:", clientErr);
+            // Don't fail the whole operation
+          }
+        }
+        
+        addToast("Empréstimo foi aprovado!", "success");
+        return mapped;
+      } catch (err) {
+        console.error("Erro ao aprovar empréstimo:", err);
+        addToast("Erro ao aprovar empréstimo.", "error");
+        throw err;
+      }
+    },
+    [addToast, mapLoanFromApi, loans, clients],
+  );
+
+  const rejectLoan = useCallback(
+    async (id, reason) => {
+      try {
+        // When rejecting a loan requisition:
+        // - Set status to "cancelled" (prevents value from being deducted)
+        // - Store rejection reason in localStorage as temporary solution
+        // - Do NOT auto-reject the client (allow resubmission with different terms)
+        
+        // Save rejection reason to localStorage temporarily (waiting for migration)
+        if (reason) {
+          const rejectionNotes = JSON.parse(localStorage.getItem("rejectionNotes") || "{}");
+          rejectionNotes[id] = reason;
+          localStorage.setItem("rejectionNotes", JSON.stringify(rejectionNotes));
+        }
+        
+        const res = await apiUpdateLoan(id, { status: "cancelled" });
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        const mapped = mapLoanFromApi(updated);
+        setLoans((prev) => prev.map((l) => (l.id === id ? mapped : l)));
+        addToast("Requisição foi rejeitada. Empréstimo cancelado e valor NÃO descontado.", "info");
+        return mapped;
+      } catch (err) {
+        console.error("Erro ao rejeitar empréstimo:", err);
+        addToast("Erro ao rejeitar empréstimo.", "error");
+        throw err;
+      }
+    },
+    [addToast, mapLoanFromApi],
+  );
 
   // Client CRUD
-  const createClientRecord = useCallback(async (data) => {
-    try {
-      const res = await apiCreateClient(data);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setClients((prev) => [created, ...prev]);
-      addToast("Cliente cadastrado!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao cadastrar cliente.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const createClientRecord = useCallback(
+    async (data) => {
+      try {
+        // IMPORTANT: Employee can ONLY create clients as "pending" (awaiting admin approval)
+        // Even if the form had an approval_status field, it would be overridden here
+        // This ensures employees cannot bypass the approval workflow
+        const submissionData = { ...data };
+        let toastMessage = "Cliente cadastrado!";
+        
+        if (userRole === "employee") {
+          // EMPLOYEE: ALWAYS force pending approval status
+          submissionData.approval_status = "pending";
+          submissionData.status = "inactive"; // Visual indicator of pending approval
+          toastMessage = "Cliente cadastrado! Aguardando aprovação do Admin.";
+        } else {
+          // ADMIN/SUPERVISOR: Create as already approved
+          submissionData.approval_status = "approved";
+          // Admin can set status directly, or default to active
+          if (!submissionData.status) {
+            submissionData.status = "active";
+          }
+        }
+        
+        const res = await apiCreateClient(submissionData);
+        const created = Array.isArray(res.data) ? res.data[0] : res.data;
+        setClients((prev) => [created, ...prev]);
+        
+        // Auto-assign client to creator as "owner"
+        if (created.id && currentUser?.id) {
+          try {
+            await assignClientToEmployee(created.id, currentUser.id, "owner", currentUser.id);
+          } catch (assignErr) {
+            console.warn("Failed to create assignment:", assignErr);
+            // Don't fail the whole operation if assignment fails
+          }
+        }
+        
+        addToast(toastMessage, "success");
+        return created;
+      } catch (err) {
+        addToast("Erro ao cadastrar cliente.", "error");
+        throw err;
+      }
+    },
+    [addToast, currentUser, userRole],
+  );
 
-  const editClientRecord = useCallback(async (id, data) => {
-    try {
-      const res = await apiUpdateClient(id, data);
-      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
-      setClients((prev) => prev.map((c) => (c.id === id ? updated : c)));
-      addToast("Cliente atualizado!", "success");
-      return updated;
-    } catch (err) {
-      addToast("Erro ao atualizar cliente.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const editClientRecord = useCallback(
+    async (id, data) => {
+      try {
+        const res = await apiUpdateClient(id, data);
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        setClients((prev) => prev.map((c) => (c.id === id ? updated : c)));
+        addToast("Cliente atualizado!", "success");
+        return updated;
+      } catch (err) {
+        addToast("Erro ao atualizar cliente.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
-  const removeClientRecord = useCallback(async (id) => {
-    try {
-      await apiDeleteClient(id);
-      setClients((prev) => prev.filter((c) => c.id !== id));
-      addToast("Cliente excluído.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir cliente.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const removeClientRecord = useCallback(
+    async (id) => {
+      try {
+        await apiDeleteClient(id);
+        setClients((prev) => prev.filter((c) => c.id !== id));
+        addToast("Cliente excluído.", "success");
+      } catch (err) {
+        addToast("Erro ao excluir cliente.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
+
+  // Client Approval/Rejection (Admin only)
+  const approveClient = useCallback(
+    async (id) => {
+      try {
+        // When approving a client, also set status to "active"
+        const res = await apiUpdateClient(id, { 
+          approval_status: "approved",
+          status: "active"
+        });
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        setClients((prev) => prev.map((c) => (c.id === id ? updated : c)));
+        addToast("Cliente aprovado!", "success");
+        return updated;
+      } catch (err) {
+        addToast("Erro ao aprovar cliente.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
+
+  const rejectClient = useCallback(
+    async (id, reason) => {
+      try {
+        const res = await apiUpdateClient(id, { 
+          approval_status: "rejected",
+          rejection_reason: reason || "Rejeitado pelo administrador"
+        });
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        setClients((prev) => prev.map((c) => (c.id === id ? updated : c)));
+        addToast("Cliente rejeitado.", "info");
+        return updated;
+      } catch (err) {
+        addToast("Erro ao rejeitar cliente.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
   // Transaction CRUD
-  const createTransactionRecord = useCallback(async (data) => {
-    try {
-      const res = await apiCreateTransaction(data);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setTransactions((prev) => [created, ...prev]);
-      addToast("Transação registrada!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao registrar transação.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const createTransactionRecord = useCallback(
+    async (data) => {
+      try {
+        const res = await apiCreateTransaction(data);
+        const created = Array.isArray(res.data) ? res.data[0] : res.data;
+        setTransactions((prev) => [created, ...prev]);
+        addToast("Transação registrada!", "success");
+        return created;
+      } catch (err) {
+        addToast("Erro ao registrar transação.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
-  const removeTransactionRecord = useCallback(async (id) => {
-    try {
-      await apiDeleteTransaction(id);
-      setTransactions((prev) => prev.filter((t) => t.id !== id));
-      addToast("Transação excluída.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir transação.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  // Sale CRUD
-  const createSaleRecord = useCallback(async (data) => {
-    try {
-      const res = await apiCreateSale(data);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setSales((prev) => [created, ...prev]);
-      addToast("Venda registrada!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao registrar venda.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  const editSaleRecord = useCallback(async (id, data) => {
-    try {
-      const res = await apiUpdateSale(id, data);
-      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
-      setSales((prev) => prev.map((s) => (s.id === id ? updated : s)));
-      addToast("Venda atualizada!", "success");
-      return updated;
-    } catch (err) {
-      addToast("Erro ao atualizar venda.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  const removeSaleRecord = useCallback(async (id) => {
-    try {
-      await apiDeleteSale(id);
-      setSales((prev) => prev.filter((s) => s.id !== id));
-      addToast("Venda excluída.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir venda.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  // Vehicle CRUD
-  const createVehicleRecord = useCallback(async (data) => {
-    try {
-      const res = await apiCreateVehicle(data);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setVehicles((prev) => [created, ...prev]);
-      addToast("Veículo cadastrado!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao cadastrar veículo.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  const editVehicleRecord = useCallback(async (id, data) => {
-    try {
-      const res = await apiUpdateVehicle(id, data);
-      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
-      setVehicles((prev) => prev.map((v) => (v.id === id ? updated : v)));
-      addToast("Veículo atualizado!", "success");
-      return updated;
-    } catch (err) {
-      addToast("Erro ao atualizar veículo.", "error");
-      throw err;
-    }
-  }, [addToast]);
-
-  const removeVehicleRecord = useCallback(async (id) => {
-    try {
-      await apiDeleteVehicle(id);
-      setVehicles((prev) => prev.filter((v) => v.id !== id));
-      addToast("Veículo excluído.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir veículo.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const removeTransactionRecord = useCallback(
+    async (id) => {
+      try {
+        await apiDeleteTransaction(id);
+        setTransactions((prev) => prev.filter((t) => t.id !== id));
+        addToast("Transação excluída.", "success");
+      } catch (err) {
+        addToast("Erro ao excluir transação.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
   // Employee CRUD
-  const createEmployeeRecord = useCallback(async (data) => {
-    try {
-      const res = await apiCreateEmployee(data);
-      const created = Array.isArray(res.data) ? res.data[0] : res.data;
-      setEmployees((prev) => [created, ...prev]);
-      addToast("Funcionário cadastrado!", "success");
-      return created;
-    } catch (err) {
-      addToast("Erro ao cadastrar funcionário.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const createEmployeeRecord = useCallback(
+    async (data) => {
+      try {
+        const res = await apiCreateEmployee(data);
+        const created = Array.isArray(res.data) ? res.data[0] : res.data;
+        setEmployees((prev) => [created, ...prev]);
+        addToast("Funcionário cadastrado!", "success");
+        return created;
+      } catch (err) {
+        addToast("Erro ao cadastrar funcionário.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
-  const editEmployeeRecord = useCallback(async (id, data) => {
-    try {
-      const res = await apiUpdateEmployee(id, data);
-      const updated = Array.isArray(res.data) ? res.data[0] : res.data;
-      setEmployees((prev) => prev.map((e) => (e.id === id ? updated : e)));
-      addToast("Funcionário atualizado!", "success");
-      return updated;
-    } catch (err) {
-      addToast("Erro ao atualizar funcionário.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const editEmployeeRecord = useCallback(
+    async (id, data) => {
+      try {
+        const res = await apiUpdateEmployee(id, data);
+        const updated = Array.isArray(res.data) ? res.data[0] : res.data;
+        setEmployees((prev) => prev.map((e) => (e.id === id ? updated : e)));
+        addToast("Funcionário atualizado!", "success");
+        return updated;
+      } catch (err) {
+        addToast("Erro ao atualizar funcionário.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
-  const removeEmployeeRecord = useCallback(async (id) => {
-    try {
-      await apiDeleteEmployee(id);
-      setEmployees((prev) => prev.filter((e) => e.id !== id));
-      addToast("Funcionário excluído.", "success");
-    } catch (err) {
-      addToast("Erro ao excluir funcionário.", "error");
-      throw err;
-    }
-  }, [addToast]);
+  const removeEmployeeRecord = useCallback(
+    async (id) => {
+      try {
+        await apiDeleteEmployee(id);
+        setEmployees((prev) => prev.filter((e) => e.id !== id));
+        addToast("Funcionário excluído.", "success");
+      } catch (err) {
+        addToast("Erro ao excluir funcionário.", "error");
+        throw err;
+      }
+    },
+    [addToast],
+  );
 
   // Demo data (offline mode)
   const loadDemoData = useCallback(() => {
     const today = new Date().toISOString().split("T")[0];
     setClients([
-      { id: 1, name: "João Silva", email: "joao@email.com", phone: "(11) 98765-4321", cpf_cnpj: "123.456.789-00", status: "active", address: "Rua das Flores, 123", notes: "" },
-      { id: 2, name: "Maria Souza", email: "maria@email.com", phone: "(21) 99876-5432", cpf_cnpj: "987.654.321-00", status: "overdue", address: "Av. Brasil, 456", notes: "Atraso frequente" },
-      { id: 3, name: "Carlos Pereira", email: "carlos@email.com", phone: "(31) 91234-5678", cpf_cnpj: "456.789.123-00", status: "active", address: "Rua do Comércio, 789", notes: "" },
+      {
+        id: 1,
+        name: "João Silva",
+        email: "joao@email.com",
+        phone: "(11) 98765-4321",
+        cpf_cnpj: "123.456.789-00",
+        status: "active",
+        address: "Rua das Flores, 123",
+        notes: "",
+      },
+      {
+        id: 2,
+        name: "Maria Souza",
+        email: "maria@email.com",
+        phone: "(21) 99876-5432",
+        cpf_cnpj: "987.654.321-00",
+        status: "overdue",
+        address: "Av. Brasil, 456",
+        notes: "Atraso frequente",
+      },
+      {
+        id: 3,
+        name: "Carlos Pereira",
+        email: "carlos@email.com",
+        phone: "(31) 91234-5678",
+        cpf_cnpj: "456.789.123-00",
+        status: "active",
+        address: "Rua do Comércio, 789",
+        notes: "",
+      },
     ]);
     setLoans([
-      { id: 1, client: "João Silva", client_id: 1, value: 5000, installments: 12, paid: 3, status: "active", interest_rate: 5, start_date: "2025-01-15", interest_type: "compound" },
-      { id: 2, client: "Maria Souza", client_id: 2, value: 3000, installments: 6, paid: 6, status: "paid", interest_rate: 4, start_date: "2024-10-01", interest_type: "compound" },
-      { id: 3, client: "Carlos Pereira", client_id: 3, value: 8000, installments: 24, paid: 1, status: "overdue", interest_rate: 6, start_date: "2025-02-01", interest_type: "compound" },
+      {
+        id: 1,
+        client: "João Silva",
+        client_id: 1,
+        value: 5000,
+        installments: 12,
+        paid: 3,
+        status: "active",
+        interest_rate: 5,
+        start_date: "2025-01-15",
+        interest_type: "compound",
+      },
+      {
+        id: 2,
+        client: "Maria Souza",
+        client_id: 2,
+        value: 3000,
+        installments: 6,
+        paid: 6,
+        status: "paid",
+        interest_rate: 4,
+        start_date: "2024-10-01",
+        interest_type: "compound",
+      },
+      {
+        id: 3,
+        client: "Carlos Pereira",
+        client_id: 3,
+        value: 8000,
+        installments: 24,
+        paid: 1,
+        status: "overdue",
+        interest_rate: 6,
+        start_date: "2025-02-01",
+        interest_type: "compound",
+      },
     ]);
     setTransactions([
-      { id: 1, description: "Recebimento parcela - João Silva", category: "Empréstimo", type: "income", amount: 450, date: today },
-      { id: 2, description: "Recebimento parcela - Maria Souza", category: "Empréstimo", type: "income", amount: 530, date: today },
-      { id: 3, description: "Despesa operacional", category: "Operacional", type: "expense", amount: 200, date: today },
+      {
+        id: 1,
+        description: "Recebimento parcela - João Silva",
+        category: "Empréstimo",
+        type: "income",
+        amount: 450,
+        date: today,
+      },
+      {
+        id: 2,
+        description: "Recebimento parcela - Maria Souza",
+        category: "Empréstimo",
+        type: "income",
+        amount: 530,
+        date: today,
+      },
+      {
+        id: 3,
+        description: "Despesa operacional",
+        category: "Operacional",
+        type: "expense",
+        amount: 200,
+        date: today,
+      },
     ]);
   }, []);
 
@@ -400,19 +651,38 @@ export default function App() {
       getClients(),
       getTransactions(),
       getLoans(),
-      getSales(),
-      getVehicles(),
       getEmployees(),
       getNotifications(),
     ]);
-    const [cRes, tRes, lRes, sRes, vRes, eRes, nRes] = results;
+    const [cRes, tRes, lRes, eRes, nRes] = results;
     if (cRes.status === "fulfilled") setClients(cRes.value.data || []);
     if (tRes.status === "fulfilled") setTransactions(tRes.value.data || []);
-    if (lRes.status === "fulfilled") setLoans(lRes.value.data || []);
-    if (sRes.status === "fulfilled") setSales(sRes.value.data || []);
-    if (vRes.status === "fulfilled") setVehicles(vRes.value.data || []);
+    if (lRes.status === "fulfilled") {
+      // Map loans: convert clients: { name } to client: "name"
+      const loansData = (lRes.value.data || []).map((loan) => ({
+        ...loan,
+        client: loan.clients?.name || loan.client || "",
+      }));
+      setLoans(loansData);
+    }
     if (eRes.status === "fulfilled") setEmployees(eRes.value.data || []);
     if (nRes.status === "fulfilled") setNotifications(nRes.value.data || []);
+  }, []);
+
+  // Alias for reloading loans from Financeiro page
+  const reloadLoans = useCallback(async () => {
+    try {
+      const res = await getLoans();
+      if (res.status === "fulfilled" || res.data) {
+        const loansData = (res.data || []).map((loan) => ({
+          ...loan,
+          client: loan.clients?.name || loan.client || "",
+        }));
+        setLoans(loansData);
+      }
+    } catch (err) {
+      console.error("[App] Erro ao recarregar loans:", err);
+    }
   }, []);
 
   useEffect(() => {
@@ -441,35 +711,39 @@ export default function App() {
     setTransactions,
     loans,
     setLoans,
-    sales,
-    setSales,
-    vehicles,
-    setVehicles,
+    reloadLoans,
+    payments,
+    setPayments,
     employees,
     setEmployees,
     notifications,
     setNotifications,
     settings,
     saveSettings,
+    caixa,
+    saveCaixa,
     createLoan,
     editLoan,
     removeLoan,
+    approveLoan,
+    rejectLoan,
     createClientRecord,
     editClientRecord,
     removeClientRecord,
+    approveClient,
+    rejectClient,
     createTransactionRecord,
     removeTransactionRecord,
-    createSaleRecord,
-    editSaleRecord,
-    removeSaleRecord,
-    createVehicleRecord,
-    editVehicleRecord,
-    removeVehicleRecord,
     createEmployeeRecord,
     editEmployeeRecord,
     removeEmployeeRecord,
     loadDataFromApi,
     loadDemoData,
+    getClientAssignments,
+    getEmployeeClients,
+    assignClientToEmployee,
+    updateClientAssignment,
+    deleteClientAssignment,
   };
 
   return (
@@ -479,7 +753,13 @@ export default function App() {
           <Routes>
             <Route
               path="/login"
-              element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginScreen />}
+              element={
+                isAuthenticated ? (
+                  <Navigate to="/dashboard" replace />
+                ) : (
+                  <LoginScreen />
+                )
+              }
             />
             <Route path="/" element={<ProtectedLayout />}>
               <Route index element={<Navigate to="/dashboard" replace />} />
@@ -487,10 +767,9 @@ export default function App() {
               <Route path="clientes" element={<Clientes />} />
               <Route path="financeiro" element={<Financeiro />} />
               <Route path="emprestimos" element={<Emprestimos />} />
+              <Route path="simulador" element={<Simulador />} />
               <Route path="cobrancas" element={<Cobrancas />} />
               <Route path="recebimentos" element={<Recebimentos />} />
-              <Route path="vendas" element={<Vendas />} />
-              <Route path="veiculos" element={<Veiculos />} />
               <Route path="funcionarios" element={<Funcionarios />} />
               <Route path="relatorios" element={<Relatorios />} />
               <Route path="agenda" element={<Agenda />} />
@@ -499,7 +778,13 @@ export default function App() {
             </Route>
             <Route
               path="*"
-              element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />}
+              element={
+                isAuthenticated ? (
+                  <Navigate to="/dashboard" replace />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
             />
           </Routes>
           <Modal isOpen={modal.isOpen} title={modal.title} onClose={closeModal}>

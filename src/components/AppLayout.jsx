@@ -10,7 +10,7 @@ import TopBar from "./TopBar";
 import MobileHeader from "./MobileHeader";
 
 function AppLayout({ children }) {
-  const { setIsAuthenticated, setAuthToken, notifications, setNotifications, userRole } =
+  const { setIsAuthenticated, setAuthToken, notifications, setNotifications, userRole, loans, clients } =
     useContext(AppContext);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const navigate = useNavigate();
@@ -30,6 +30,16 @@ function AppLayout({ children }) {
     setNotifications([]);
   };
 
+  // Count pending loan requisitions for admin/supervisor
+  const pendingRequisitionsCount = (userRole === "admin" || userRole === "supervisor") 
+    ? (loans || []).filter(l => l.status === "pending").length 
+    : 0;
+
+  // Count pending clients for admin/supervisor
+  const pendingClientsCount = (userRole === "admin" || userRole === "supervisor")
+    ? (clients || []).filter(c => c.approval_status === "pending").length
+    : 0;
+
   return (
     <div id="app" className={`app ${isSidebarOpen ? "sidebar-open" : ""}`}>
       {" "}
@@ -39,6 +49,8 @@ function AppLayout({ children }) {
         toggleSidebar={toggleSidebar}
         onLogout={handleLogout}
         notificationsCount={notifications.length}
+        pendingRequisitionsCount={pendingRequisitionsCount}
+        pendingClientsCount={pendingClientsCount}
         userRole={userRole}
       />
       {isSidebarOpen && (

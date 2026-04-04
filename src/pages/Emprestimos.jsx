@@ -1,15 +1,69 @@
 // src/pages/Emprestimos.jsx
 import React, { useContext, useState, useMemo } from "react";
 import { AppContext } from "../App";
-import { fmt, fmtDate, calcPMT, buildAmortizationTable } from "../utils/helpers";
+import {
+  fmt,
+  fmtDate,
+  calcPMT,
+  buildAmortizationTable,
+  getClientName,
+} from "../utils/helpers";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+
+// ── Build Installments (same logic as Cobrancas/Dashboard) ──────────────────
+function buildInstallments(loans, today) {
+  const items = [];
+  loans.forEach((loan) => {
+    if (!loan.start_date) return;
+    const v = Number(loan.value) || 0;
+    const rate = (Number(loan.interest_rate) || 0) / 100;
+    const n = Number(loan.installments) || 0;
+    const paid = Number(loan.paid) || 0;
+    if (!v || !n) return;
+
+    const pmt = calcPMT(v, rate, n);
+    const start = new Date(loan.start_date + "T00:00:00");
+
+    for (let i = 1; i <= n; i++) {
+      const due = new Date(start);
+      due.setMonth(due.getMonth() + (i - 1));
+      const dueDate = due.toISOString().split("T")[0];
+
+      let status;
+      if (i <= paid) {
+        status = "paid";
+      } else if (due < today) {
+        status = "overdue";
+      } else {
+        status = "due";
+      }
+
+      items.push({
+        id: `${loan.id}-${i}`,
+        loanId: loan.id,
+        client: getClientName(loan.client),
+        installmentNo: i,
+        totalInstallments: n,
+        dueDate,
+        due,
+        amount: pmt,
+        status,
+      });
+    }
+  });
+  return items.sort((a, b) => a.due - b.due);
+}
 
 const STATUS_OPTS = [
   { value: "", label: "Todos" },
   { value: "active", label: "Ativos" },
+  { value: "pending", label: "Pendentes" },
   { value: "overdue", label: "Atrasados" },
   { value: "paid", label: "Pagos" },
   { value: "renegotiated", label: "Renegociados" },
   { value: "cancelled", label: "Cancelados" },
+  { value: "rejected", label: "Rejeitados" },
 ];
 
 const STATUS_MAP = {
@@ -19,6 +73,7 @@ const STATUS_MAP = {
   renegotiated: { label: "Renegociado", cls: "status-pending" },
   cancelled: { label: "Cancelado", cls: "status-inactive" },
   pending: { label: "Pendente", cls: "status-pending" },
+  rejected: { label: "Rejeitado", cls: "status-inactive" },
 };
 
 const EMPTY_LOAN = {
@@ -34,8 +89,21 @@ const EMPTY_LOAN = {
   notes: "",
 };
 
-function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
-  const [form, setForm] = useState(initial || { ...EMPTY_LOAN, interest_rate: settings?.defaultInterestRate || 5 });
+function LoanForm({
+  initial,
+  clients,
+  settings,
+  onSave,
+  onCancel,
+  isSaving,
+  userRole,
+}) {
+  const [form, setForm] = useState(
+    initial || {
+      ...EMPTY_LOAN,
+      interest_rate: settings?.defaultInterestRate || 5,
+    },
+  );
   const [errors, setErrors] = useState({});
 
   const set = (field, val) => {
@@ -49,7 +117,7 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
     const n = parseInt(form.installments) || 0;
     if (!v || !n) return 0;
     if (form.interest_type === "compound") return calcPMT(v, r, n);
-    return v * (1 + r * n) / n;
+    return (v * (1 + r * n)) / n;
   }, [form.value, form.interest_rate, form.installments, form.interest_type]);
 
   const totalAmount = useMemo(() => {
@@ -58,7 +126,8 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
 
   const validate = () => {
     const e = {};
-    if (!form.client && !form.client_id) e.client = "Selecione ou informe o cliente.";
+    if (!form.client && !form.client_id)
+      e.client = "Selecione ou informe o cliente.";
     if (!form.value || parseFloat(String(form.value).replace(",", ".")) <= 0)
       e.value = "Valor deve ser maior que zero.";
     if (!form.interest_rate && form.interest_rate !== 0)
@@ -77,7 +146,7 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
     onSave({
       ...form,
       client: clientObj ? clientObj.name : form.client,
-      client_id: clientObj ? clientObj.id : (form.client_id || null),
+      client_id: clientObj ? clientObj.id : form.client_id || null,
       value: parseFloat(String(form.value).replace(",", ".")) || 0,
       interest_rate: parseFloat(form.interest_rate) || 0,
       installments: parseInt(form.installments) || 0,
@@ -102,7 +171,9 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
           >
             <option value="">Selecione um cliente</option>
             {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
         ) : (
@@ -137,7 +208,9 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
             onChange={(e) => set("start_date", e.target.value)}
             className={errors.start_date ? "input-error" : ""}
           />
-          {errors.start_date && <span className="field-error">{errors.start_date}</span>}
+          {errors.start_date && (
+            <span className="field-error">{errors.start_date}</span>
+          )}
         </div>
       </div>
 
@@ -153,7 +226,9 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
             step="0.01"
             className={errors.interest_rate ? "input-error" : ""}
           />
-          {errors.interest_rate && <span className="field-error">{errors.interest_rate}</span>}
+          {errors.interest_rate && (
+            <span className="field-error">{errors.interest_rate}</span>
+          )}
         </div>
         <div className="form-row">
           <label>Tipo de Juros</label>
@@ -178,7 +253,9 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
             min="1"
             className={errors.installments ? "input-error" : ""}
           />
-          {errors.installments && <span className="field-error">{errors.installments}</span>}
+          {errors.installments && (
+            <span className="field-error">{errors.installments}</span>
+          )}
         </div>
         <div className="form-row">
           <label>Parcelas Pagas</label>
@@ -204,20 +281,31 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
           <div className="loan-summary-item">
             <span>Total de Juros:</span>
             <strong className="text-warning">
-              {fmt(totalAmount - (parseFloat(String(form.value).replace(",", ".")) || 0))}
+              {fmt(
+                totalAmount -
+                  (parseFloat(String(form.value).replace(",", ".")) || 0),
+              )}
             </strong>
           </div>
         </div>
       )}
 
-      <div className="form-row">
-        <label>Status</label>
-        <select value={form.status} onChange={(e) => set("status", e.target.value)}>
-          {STATUS_OPTS.filter((o) => o.value !== "").map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-      </div>
+      {/* Status field: Only visible for admin/supervisor */}
+      {userRole !== "employee" && (
+        <div className="form-row">
+          <label>Status</label>
+          <select
+            value={form.status}
+            onChange={(e) => set("status", e.target.value)}
+          >
+            {STATUS_OPTS.filter((o) => o.value !== "").map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="form-row">
         <label>Observações</label>
@@ -230,10 +318,18 @@ function LoanForm({ initial, clients, settings, onSave, onCancel, isSaving }) {
       </div>
 
       <div className="form-actions">
-        <button type="button" className="btn btn-outline btn-sm" onClick={onCancel}>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={onCancel}
+        >
           Cancelar
         </button>
-        <button type="submit" className="btn btn-gold btn-sm" disabled={isSaving}>
+        <button
+          type="submit"
+          className="btn btn-gold btn-sm"
+          disabled={isSaving}
+        >
           {isSaving ? "Salvando..." : "Salvar"}
         </button>
       </div>
@@ -253,8 +349,10 @@ function AmortizationModal({ loan, onClose }) {
       const pmt = totalAmount / n;
       const rows = [];
       for (let i = 1; i <= n; i++) {
-        const due = loan.start_date ? new Date(loan.start_date + "T00:00:00") : new Date();
-        due.setMonth(due.getMonth() + i);
+        const due = loan.start_date
+          ? new Date(loan.start_date + "T00:00:00")
+          : new Date();
+        due.setMonth(due.getMonth() + (i - 1));
         rows.push({
           installment: i,
           dueDate: due.toISOString().split("T")[0],
@@ -271,10 +369,24 @@ function AmortizationModal({ loan, onClose }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 12, color: "var(--text-dim)", fontSize: "0.85rem" }}>
-        <strong>{loan.client}</strong> — {fmt(loan.value)} a {loan.interest_rate}% a.m. ({loan.interest_type === "compound" ? "Juros Compostos" : "Juros Simples"})
+      <div
+        style={{
+          marginBottom: 12,
+          color: "var(--text-dim)",
+          fontSize: "0.85rem",
+        }}
+      >
+        <strong>{getClientName(loan.client)}</strong> — {fmt(loan.value)} a{" "}
+        {loan.interest_rate}% a.m. (
+        {loan.interest_type === "compound"
+          ? "Juros Compostos"
+          : "Juros Simples"}
+        )
       </div>
-      <div className="table-wrapper" style={{ maxHeight: 400, overflowY: "auto" }}>
+      <div
+        className="table-wrapper"
+        style={{ maxHeight: 400, overflowY: "auto" }}
+      >
         <table className="data-table">
           <thead>
             <tr>
@@ -288,7 +400,12 @@ function AmortizationModal({ loan, onClose }) {
           </thead>
           <tbody>
             {table.map((row) => (
-              <tr key={row.installment} className={row.installment <= (loan.paid || 0) ? "row-paid" : ""}>
+              <tr
+                key={row.installment}
+                className={
+                  row.installment <= (loan.paid || 0) ? "row-paid" : ""
+                }
+              >
                 <td>{row.installment}</td>
                 <td>{fmtDate(row.dueDate)}</td>
                 <td>{fmt(row.payment)}</td>
@@ -301,7 +418,9 @@ function AmortizationModal({ loan, onClose }) {
         </table>
       </div>
       <div style={{ marginTop: 12, textAlign: "right" }}>
-        <button className="btn btn-outline btn-sm" onClick={onClose}>Fechar</button>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>
+          Fechar
+        </button>
       </div>
     </div>
   );
@@ -309,9 +428,19 @@ function AmortizationModal({ loan, onClose }) {
 
 function Emprestimos() {
   const {
-    loans, clients, settings,
-    openModal, closeModal, addToast,
-    createLoan, editLoan, removeLoan,
+    loans,
+    clients,
+    settings,
+    openModal,
+    closeModal,
+    addToast,
+    createLoan,
+    editLoan,
+    removeLoan,
+    approveLoan,
+    rejectLoan,
+    currentUser,
+    userRole,
   } = useContext(AppContext);
 
   const [search, setSearch] = useState("");
@@ -319,46 +448,100 @@ function Emprestimos() {
   const [isSaving, setIsSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
+  // ── Today (fixed reference) ────────────────────────────────────────────────
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  // ── Access Control: Employees see only their own clients that are approved ──────────
+  const accessibleClients = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id) {
+      // Employees see ONLY their own clients (that they created)
+      return clients.filter(
+        (c) => c.created_by === currentUser.id || c.owner_id === currentUser.id,
+      );
+    }
+    return clients; // Admin/guest see all
+  }, [clients, currentUser, userRole]);
+
+  // ── Access Control: Employees see only their own loans ──────────────────
+  const accessibleLoans = useMemo(() => {
+    if (userRole === "employee" && currentUser?.id && clients) {
+      // Get client IDs created by this employee
+      const myClientIds = clients
+        .filter(
+          (c) =>
+            c.created_by === currentUser.id || c.owner_id === currentUser.id,
+        )
+        .map((c) => c.id);
+      // Filter loans to only those for accessible clients
+      return loans.filter((l) => myClientIds.includes(l.client_id));
+    }
+    return loans; // Admin/guest see all
+  }, [loans, clients, currentUser, userRole]);
+
+  // ── Generate all installments (same logic as Cobrancas/Dashboard) ──────────
+  const allInstallments = useMemo(
+    () => buildInstallments(accessibleLoans, today),
+    [accessibleLoans, today],
+  );
+
   // KPI calculations
-  const activeLoans = loans.filter((l) => l.status === "active" || l.status === "overdue");
+  const activeLoans = accessibleLoans.filter(
+    (l) => l.status === "active" || l.status === "overdue",
+  );
   const totalLent = activeLoans.reduce((s, l) => s + (Number(l.value) || 0), 0);
-  const totalPaidInstallments = loans.reduce((s, l) => {
+  const totalPaidInstallments = accessibleLoans.reduce((s, l) => {
     const pmt = calcPMT(
       Number(l.value) || 0,
       (Number(l.interest_rate) || 0) / 100,
-      Number(l.installments) || 1
+      Number(l.installments) || 1,
     );
     return s + pmt * (Number(l.paid) || 0);
   }, 0);
-  const overdueCount = loans.filter((l) => l.status === "overdue").length;
+  const overdueCount = allInstallments.filter(
+    (i) => i.status === "overdue",
+  ).length;
+
+  // Filter pending requisitions (for admins/supervisors only)
+  const pendingRequisitions = useMemo(() => {
+    return loans.filter((l) => l.status === "pending");
+  }, [loans]);
 
   const filtered = useMemo(() => {
-    return loans.filter((l) => {
+    return accessibleLoans.filter((l) => {
       const matchSearch = [l.client, l.status, String(l.value)]
-        .join(" ").toLowerCase().includes(search.toLowerCase());
+        .join(" ")
+        .toLowerCase()
+        .includes(search.toLowerCase());
       const matchStatus = filterStatus ? l.status === filterStatus : true;
       return matchSearch && matchStatus;
     });
-  }, [loans, search, filterStatus]);
+  }, [accessibleLoans, search, filterStatus]);
 
   const handleAdd = () => {
     openModal(
       "Novo Empréstimo",
       <LoanForm
-        clients={clients}
+        userRole={userRole}
+        clients={userRole === "employee" ? accessibleClients : clients}
         settings={settings}
         onSave={async (form) => {
           setIsSaving(true);
           try {
             await createLoan(form);
             closeModal();
-          } catch { /* handled */ } finally {
+          } catch {
+            /* handled */
+          } finally {
             setIsSaving(false);
           }
         }}
         onCancel={closeModal}
         isSaving={isSaving}
-      />
+      />,
     );
   };
 
@@ -366,6 +549,7 @@ function Emprestimos() {
     openModal(
       "Editar Empréstimo",
       <LoanForm
+        userRole={userRole}
         initial={{
           client_id: loan.client_id ? String(loan.client_id) : "",
           client: loan.client || "",
@@ -378,20 +562,22 @@ function Emprestimos() {
           status: loan.status || "active",
           notes: loan.notes || "",
         }}
-        clients={clients}
+        clients={userRole === "employee" ? accessibleClients : clients}
         settings={settings}
         onSave={async (form) => {
           setIsSaving(true);
           try {
             await editLoan(loan.id, form);
             closeModal();
-          } catch { /* handled */ } finally {
+          } catch {
+            /* handled */
+          } finally {
             setIsSaving(false);
           }
         }}
         onCancel={closeModal}
         isSaving={isSaving}
-      />
+      />,
     );
   };
 
@@ -399,10 +585,15 @@ function Emprestimos() {
     openModal(
       "Confirmar Exclusão",
       <div className="modal-confirm">
-        <p>Excluir empréstimo de <strong>{loan.client}</strong> no valor de <strong>{fmt(loan.value)}</strong>?</p>
+        <p>
+          Excluir empréstimo de <strong>{loan.client}</strong> no valor de{" "}
+          <strong>{fmt(loan.value)}</strong>?
+        </p>
         <p className="text-dim">Esta ação não pode ser desfeita.</p>
         <div className="form-actions">
-          <button className="btn btn-outline btn-sm" onClick={closeModal}>Cancelar</button>
+          <button className="btn btn-outline btn-sm" onClick={closeModal}>
+            Cancelar
+          </button>
           <button
             className="btn btn-danger btn-sm"
             disabled={deletingId === loan.id}
@@ -411,7 +602,9 @@ function Emprestimos() {
               try {
                 await removeLoan(loan.id);
                 closeModal();
-              } catch { /* handled */ } finally {
+              } catch {
+                /* handled */
+              } finally {
                 setDeletingId(null);
               }
             }}
@@ -419,14 +612,14 @@ function Emprestimos() {
             {deletingId === loan.id ? "Excluindo..." : "Excluir"}
           </button>
         </div>
-      </div>
+      </div>,
     );
   };
 
   const handleViewAmortization = (loan) => {
     openModal(
-      `Tabela de Amortização — ${loan.client}`,
-      <AmortizationModal loan={loan} onClose={closeModal} />
+      `Tabela de Amortização — ${getClientName(loan.client)}`,
+      <AmortizationModal loan={loan} onClose={closeModal} />,
     );
   };
 
@@ -434,19 +627,39 @@ function Emprestimos() {
     const pmt = calcPMT(
       Number(loan.value) || 0,
       (Number(loan.interest_rate) || 0) / 100,
-      Number(loan.installments) || 1
+      Number(loan.installments) || 1,
     );
-    const remaining = (Number(loan.installments) || 0) - (Number(loan.paid) || 0);
+    const remaining =
+      (Number(loan.installments) || 0) - (Number(loan.paid) || 0);
 
     openModal(
-      `Registrar Pagamento — ${loan.client}`,
+      `Registrar Pagamento — ${getClientName(loan.client)}`,
       <div className="modal-form">
-        <div style={{ marginBottom: 16, padding: "12px", background: "var(--bg-primary)", borderRadius: 8 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "12px",
+            background: "var(--bg-primary)",
+            borderRadius: 8,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 4,
+            }}
+          >
             <span className="text-dim">Valor da parcela:</span>
             <strong>{fmt(pmt)}</strong>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 4,
+            }}
+          >
             <span className="text-dim">Parcelas restantes:</span>
             <strong>{remaining}</strong>
           </div>
@@ -461,29 +674,259 @@ function Emprestimos() {
             : `Confirmar pagamento da parcela ${Number(loan.paid) + 1} de ${loan.installments}?`}
         </p>
         <div className="form-actions">
-          <button className="btn btn-outline btn-sm" onClick={closeModal}>Cancelar</button>
+          <button className="btn btn-outline btn-sm" onClick={closeModal}>
+            Cancelar
+          </button>
           {remaining > 0 && (
             <button
               className="btn btn-gold btn-sm"
               onClick={async () => {
                 const newPaid = Number(loan.paid) + 1;
-                const newStatus = newPaid >= Number(loan.installments) ? "paid" : loan.status;
+                const newStatus =
+                  newPaid >= Number(loan.installments) ? "paid" : loan.status;
                 try {
                   await editLoan(loan.id, { paid: newPaid, status: newStatus });
-                  addToast(`Parcela ${newPaid}/${loan.installments} registrada!`, "success");
+                  addToast(
+                    `Parcela ${newPaid}/${loan.installments} registrada!`,
+                    "success",
+                  );
                   closeModal();
-                } catch { /* handled */ }
+                } catch {
+                  /* handled */
+                }
               }}
             >
               Confirmar Pagamento
             </button>
           )}
         </div>
-      </div>
+      </div>,
     );
   };
 
-  const statusInfo = (s) => STATUS_MAP[s] || { label: s, cls: "status-inactive" };
+  const handleViewProtocol = (loan) => {
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, "0");
+    const code = "01"; // Código para empréstimo
+    const sequence = String(loan.id).padStart(4, "0");
+    const year = now.getFullYear();
+    const protocolId = `${day}.${code}/${sequence}/${year}`;
+    openModal(
+      "Protocolo do Empréstimo",
+      <div
+        className="modal-form"
+        style={{ textAlign: "center", padding: "24px", position: "relative" }}
+      >
+        {/* Logo no canto superior esquerdo */}
+        <div
+          style={{
+            position: "absolute",
+            top: "16px",
+            left: "16px",
+            width: "60px",
+            height: "60px",
+            overflow: "hidden",
+            borderRadius: "4px",
+            background: "var(--bg-alt)",
+            border: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <img
+            src="/logo.jpeg"
+            alt="Logo"
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: "24px" }}>
+          <div
+            style={{
+              fontSize: "0.9rem",
+              color: "var(--text-dim)",
+              marginBottom: "12px",
+            }}
+          >
+            Protocolo de Emissão
+          </div>
+          <div
+            style={{
+              fontSize: "1.8rem",
+              fontWeight: 900,
+              color: "var(--gold)",
+              fontFamily: "monospace",
+              padding: "16px",
+              background: "var(--bg-alt)",
+              borderRadius: "8px",
+              border: "2px solid var(--border)",
+              marginBottom: "16px",
+            }}
+          >
+            {protocolId}
+          </div>
+          <div style={{ fontSize: "0.85rem", color: "var(--text-dim)" }}>
+            <div style={{ marginBottom: "8px" }}>
+              <strong>Cliente:</strong> {getClientName(loan.client)}
+            </div>
+            <div style={{ marginBottom: "8px" }}>
+              <strong>Valor:</strong> {fmt(loan.value)}
+            </div>
+            <div style={{ marginBottom: "8px" }}>
+              <strong>Parcelas:</strong> {loan.installments}
+            </div>
+            <div style={{ marginBottom: "8px" }}>
+              <strong>Data do Empréstimo:</strong> {fmtDate(loan.start_date)}
+            </div>
+            <div>
+              <strong>Emitido em:</strong> {new Date().toLocaleString("pt-BR")}
+            </div>
+          </div>
+        </div>
+        <div className="form-actions">
+          <button className="btn btn-outline btn-sm" onClick={closeModal}>
+            Fechar
+          </button>
+          <button
+            className="btn btn-gold btn-sm"
+            onClick={() => {
+              const text = `PROTOCOLO DE EMPRÉSTIMO\n\n${protocolId}\n\nCliente: ${getClientName(loan.client)}\nValor: ${fmt(loan.value)}\nParcelas: ${loan.installments}\nData: ${fmtDate(loan.start_date)}\n\nEmitido em: ${new Date().toLocaleString("pt-BR")}`;
+              navigator.clipboard.writeText(text);
+              addToast(
+                "Protocolo copiado para a área de transferência!",
+                "success",
+              );
+            }}
+          >
+            📋 Copiar Protocolo
+          </button>
+        </div>
+      </div>,
+    );
+  };
+
+  const handleExportContract = (loan) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    // Logo no canto superior esquerdo com fundo
+    doc.setFillColor(30, 41, 59);
+    doc.rect(0, 0, pageWidth, 20, "F");
+
+    // Tentar adicionar a logo
+    try {
+      doc.addImage("/logo.jpeg", "JPEG", 5, 3, 14, 14);
+    } catch {
+      // Se a logo não carregar, usar um placeholder com iniciais
+      doc.setTextColor(240, 200, 80);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      doc.text("FC", 8, 14);
+    }
+
+    // Título ao lado da logo
+    doc.setTextColor(240, 200, 80);
+    doc.setFontSize(14);
+    doc.setFont(undefined, "bold");
+    doc.text("CONTRATO DE EMPRÉSTIMO", 22, 13);
+
+    // Informações principais
+    let yPos = 30;
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+
+    doc.text(`Contratante: ${getClientName(loan.client)}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Valor do Empréstimo: ${fmt(loan.value)}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Taxa de Juros: ${loan.interest_rate}% a.m.`, 10, yPos);
+    yPos += 6;
+    doc.text(`Número de Parcelas: ${loan.installments}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Data de Contratação: ${fmtDate(loan.start_date)}`, 10, yPos);
+    yPos += 12;
+
+    // Título da tabela
+    doc.setFont(undefined, "bold");
+    doc.text("CRONOGRAMA DE PARCELAS", 10, yPos);
+    yPos += 8;
+    doc.setFont(undefined, "normal");
+
+    // Calcular dados da amortização
+    const v = Number(loan.value) || 0;
+    const r = (Number(loan.interest_rate) || 0) / 100;
+    const n = Number(loan.installments) || 0;
+    const pmt = calcPMT(v, r, n);
+
+    // Gerar tabela de parcelas usando autoTable
+    const tableData = [];
+    let balance = v;
+
+    for (let i = 1; i <= n; i++) {
+      const interest = balance * r;
+      const amort = pmt - interest;
+      balance -= amort;
+
+      const due = new Date(loan.start_date + "T00:00:00");
+      due.setMonth(due.getMonth() + (i - 1));
+      const dueDate = due.toISOString().split("T")[0];
+
+      tableData.push([
+        i,
+        dueDate,
+        fmt(pmt),
+        fmt(interest),
+        fmt(amort),
+        fmt(Math.max(balance, 0)),
+      ]);
+    }
+
+    autoTable(doc, {
+      head: [
+        [
+          "Parc.",
+          "Vencimento",
+          "Valor Parcela",
+          "Juros",
+          "Amortização",
+          "Saldo Devedor",
+        ],
+      ],
+      body: tableData,
+      startY: yPos,
+      theme: "grid",
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: {
+        fillColor: [30, 41, 59],
+        textColor: [240, 200, 80],
+        fontStyle: "bold",
+      },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+    });
+
+    // Rodapé
+    doc.setFontSize(8);
+    doc.setTextColor(100, 100, 100);
+    doc.text(
+      `Documento gerado em ${new Date().toLocaleString("pt-BR")}`,
+      10,
+      pageHeight - 10,
+    );
+
+    doc.save(
+      `contrato-${loan.id}-${getClientName(loan.client).replace(/\s+/g, "-")}.pdf`,
+    );
+  };
+
+  const statusInfo = (s) =>
+    STATUS_MAP[s] || { label: s, cls: "status-inactive" };
 
   return (
     <div className="page active">
@@ -493,16 +936,226 @@ function Emprestimos() {
           <p className="page-desc">Gerencie os empréstimos concedidos</p>
         </div>
         <div className="header-actions">
-          <button onClick={handleAdd} className="btn btn-gold btn-sm">+ Novo Empréstimo</button>
+          <button onClick={handleAdd} className="btn btn-gold btn-sm">
+            + Novo Empréstimo
+          </button>
         </div>
       </div>
+
+      {/* Pending Requisitions Section (Admin/Supervisor only) */}
+      {(userRole === "admin" || userRole === "supervisor") &&
+        pendingRequisitions.length > 0 && (
+          <div
+            className="card"
+            style={{
+              marginBottom: 20,
+              borderColor: "var(--orange)",
+              borderLeft: "4px solid var(--orange)",
+            }}
+          >
+            <div style={{ marginBottom: 16 }}>
+              <h3 style={{ color: "var(--orange)", marginBottom: 4 }}>
+                ⏳ Requisições Pendentes de Aprovação (
+                {pendingRequisitions.length})
+              </h3>
+              <p className="text-dim" style={{ fontSize: "0.85rem" }}>
+                Clientes e empregados aguardam aprovação para ativar empréstimos
+              </p>
+            </div>
+
+            <div className="table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Solicitante</th>
+                    <th>Valor</th>
+                    <th>Juros</th>
+                    <th>Parcelas</th>
+                    <th>Início</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingRequisitions.map((loan) => {
+                    const pmt = calcPMT(
+                      Number(loan.value) || 0,
+                      (Number(loan.interest_rate) || 0) / 100,
+                      Number(loan.installments) || 1,
+                    );
+
+                    return (
+                      <tr key={loan.id}>
+                        <td>
+                          <strong>{getClientName(loan.client)}</strong>
+                        </td>
+                        <td>
+                          <span
+                            className="text-dim"
+                            style={{ fontSize: "0.85rem" }}
+                          >
+                            {loan.created_by_name || "—"}
+                          </span>
+                        </td>
+                        <td>
+                          {fmt(loan.value)}
+                          {pmt > 0 && (
+                            <div
+                              style={{
+                                fontSize: "0.75rem",
+                                color: "var(--text-dim)",
+                              }}
+                            >
+                              {fmt(pmt)}/mês
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {loan.interest_rate
+                            ? `${loan.interest_rate}% a.m.`
+                            : "—"}
+                        </td>
+                        <td>{loan.installments}</td>
+                        <td>{fmtDate(loan.start_date)}</td>
+                        <td>
+                          <button
+                            className="btn-icon"
+                            title="Aprovar"
+                            style={{ color: "var(--green)" }}
+                            onClick={() => {
+                              openModal(
+                                `Aprovar Requisição — ${getClientName(loan.client)}`,
+                                <div className="modal-form">
+                                  <div
+                                    style={{
+                                      marginBottom: 16,
+                                      padding: "12px",
+                                      background: "var(--bg-primary)",
+                                      borderRadius: 8,
+                                    }}
+                                  >
+                                    <div style={{ marginBottom: 8 }}>
+                                      <span className="text-dim">Cliente:</span>
+                                      <strong style={{ display: "block" }}>
+                                        {getClientName(loan.client)}
+                                      </strong>
+                                    </div>
+                                    <div style={{ marginBottom: 8 }}>
+                                      <span className="text-dim">Valor:</span>
+                                      <strong style={{ display: "block" }}>
+                                        {fmt(loan.value)}
+                                      </strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-dim">
+                                        Parcelas:
+                                      </span>
+                                      <strong style={{ display: "block" }}>
+                                        {loan.installments}x de {fmt(pmt)}
+                                      </strong>
+                                    </div>
+                                  </div>
+                                  <p
+                                    style={{
+                                      color: "var(--text-dim)",
+                                      marginBottom: 12,
+                                    }}
+                                  >
+                                    Confirmar aprovação desta requisição?
+                                  </p>
+                                  <div className="form-actions">
+                                    <button
+                                      className="btn btn-outline btn-sm"
+                                      onClick={closeModal}
+                                    >
+                                      Cancelar
+                                    </button>
+                                    <button
+                                      className="btn btn-gold btn-sm"
+                                      onClick={async () => {
+                                        try {
+                                          await approveLoan(loan.id);
+                                          closeModal();
+                                        } catch {
+                                          /* handled */
+                                        }
+                                      }}
+                                    >
+                                      ✓ Aprovar
+                                    </button>
+                                  </div>
+                                </div>,
+                              );
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className="btn-icon"
+                            title="Rejeitar"
+                            style={{ color: "var(--red)" }}
+                            onClick={() => {
+                              openModal(
+                                `Rejeitar Requisição — ${getClientName(loan.client)}`,
+                                <div className="modal-form">
+                                  <p style={{ marginBottom: 16 }}>
+                                    Tem certeza que deseja rejeitar esta
+                                    requisição?
+                                  </p>
+                                  <div className="form-actions">
+                                    <button
+                                      className="btn btn-outline btn-sm"
+                                      onClick={closeModal}
+                                    >
+                                      Cancelar
+                                    </button>
+                                    <button
+                                      className="btn btn-danger btn-sm"
+                                      onClick={async () => {
+                                        try {
+                                          await rejectLoan(
+                                            loan.id,
+                                            "Rejeitado pelo administrador",
+                                          );
+                                          closeModal();
+                                        } catch {
+                                          /* handled */
+                                        }
+                                      }}
+                                    >
+                                      ✗ Rejeitar
+                                    </button>
+                                  </div>
+                                </div>,
+                              );
+                            }}
+                          >
+                            ✗
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
       {/* KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <div className="kpi-card kpi-revenue">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
             </svg>
           </div>
           <div className="kpi-info">
@@ -512,7 +1165,14 @@ function Emprestimos() {
         </div>
         <div className="kpi-card kpi-profit">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
             </svg>
           </div>
@@ -523,8 +1183,16 @@ function Emprestimos() {
         </div>
         <div className="kpi-card kpi-clients">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
             </svg>
           </div>
           <div className="kpi-info">
@@ -534,8 +1202,17 @@ function Emprestimos() {
         </div>
         <div className="kpi-card kpi-expense">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           </div>
           <div className="kpi-info">
@@ -560,7 +1237,9 @@ function Emprestimos() {
             onChange={(e) => setFilterStatus(e.target.value)}
           >
             {STATUS_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
@@ -586,42 +1265,148 @@ function Emprestimos() {
                   const pmt = calcPMT(
                     Number(loan.value) || 0,
                     (Number(loan.interest_rate) || 0) / 100,
-                    Number(loan.installments) || 1
+                    Number(loan.installments) || 1,
                   );
+
+                  // Calcular parcelas vencidas não pagas
+                  let overdueInstallments = 0;
+                  if (loan.start_date) {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const start = new Date(loan.start_date + "T00:00:00");
+                    const paid = Number(loan.paid) || 0;
+
+                    for (
+                      let i = 1;
+                      i <= (Number(loan.installments) || 0);
+                      i++
+                    ) {
+                      if (i <= paid) continue; // Já paga
+                      const due = new Date(start);
+                      due.setMonth(due.getMonth() + (i - 1));
+                      if (due < today) {
+                        overdueInstallments++;
+                      }
+                    }
+                  }
+
                   return (
-                    <tr key={loan.id} className={loan.status === "overdue" ? "row-overdue" : ""}>
-                      <td><strong>{loan.client}</strong></td>
+                    <tr
+                      key={loan.id}
+                      className={loan.status === "overdue" ? "row-overdue" : ""}
+                    >
+                      <td>
+                        <strong>{getClientName(loan.client)}</strong>
+                        {overdueInstallments > 0 && (
+                          <div
+                            style={{
+                              fontSize: "0.7rem",
+                              color: "var(--red)",
+                              fontWeight: 600,
+                              marginTop: 2,
+                            }}
+                          >
+                            ⚠️ {overdueInstallments} parcela
+                            {overdueInstallments !== 1 ? "s" : ""} em atraso
+                          </div>
+                        )}
+                      </td>
                       <td>
                         {fmt(loan.value)}
                         {pmt > 0 && (
-                          <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-dim)",
+                            }}
+                          >
                             {fmt(pmt)}/mês
                           </div>
                         )}
                       </td>
-                      <td>{loan.interest_rate ? `${loan.interest_rate}% a.m.` : "—"}</td>
+                      <td>
+                        {loan.interest_rate
+                          ? `${loan.interest_rate}% a.m.`
+                          : "—"}
+                      </td>
                       <td>{loan.installments}</td>
                       <td>
-                        <span style={{ color: loan.paid >= loan.installments ? "var(--green)" : "var(--text)" }}>
+                        <span
+                          style={{
+                            color:
+                              loan.paid >= loan.installments
+                                ? "var(--green)"
+                                : "var(--text)",
+                          }}
+                        >
                           {loan.paid}
                         </span>
                         /{loan.installments}
                       </td>
                       <td>{fmtDate(loan.start_date)}</td>
-                      <td><span className={`status ${si.cls}`}>{si.label}</span></td>
                       <td>
-                        <button className="btn-icon" title="Tabela de Amortização" onClick={() => handleViewAmortization(loan)}>📊</button>
-                        <button className="btn-icon" title="Registrar Pagamento" onClick={() => handleRegisterPayment(loan)}>💰</button>
-                        <button className="btn-icon" title="Editar" onClick={() => handleEdit(loan)}>✏️</button>
-                        <button className="btn-icon" title="Excluir" onClick={() => handleDelete(loan)}>🗑️</button>
+                        <span className={`status ${si.cls}`}>{si.label}</span>
+                      </td>
+                      <td>
+                        <button
+                          className="btn-icon"
+                          title="Tabela de Amortização"
+                          onClick={() => handleViewAmortization(loan)}
+                        >
+                          📊
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title="Protokolo"
+                          onClick={() => handleViewProtocol(loan)}
+                        >
+                          📋
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title="Baixar Contrato (PDF)"
+                          onClick={() => handleExportContract(loan)}
+                        >
+                          📄
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title="Registrar Pagamento"
+                          onClick={() => handleRegisterPayment(loan)}
+                        >
+                          💰
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title="Editar"
+                          onClick={() => handleEdit(loan)}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title="Excluir"
+                          onClick={() => handleDelete(loan)}
+                        >
+                          🗑️
+                        </button>
                       </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan="8" style={{ textAlign: "center", padding: "40px", color: "var(--text-dim)" }}>
-                    {search || filterStatus ? "Nenhum empréstimo encontrado." : "Nenhum empréstimo cadastrado. Clique em + Novo Empréstimo para começar."}
+                  <td
+                    colSpan="8"
+                    style={{
+                      textAlign: "center",
+                      padding: "40px",
+                      color: "var(--text-dim)",
+                    }}
+                  >
+                    {search || filterStatus
+                      ? "Nenhum empréstimo encontrado."
+                      : "Nenhum empréstimo cadastrado. Clique em + Novo Empréstimo para começar."}
                   </td>
                 </tr>
               )}

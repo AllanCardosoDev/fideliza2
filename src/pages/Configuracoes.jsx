@@ -1,28 +1,12 @@
 // src/pages/Configuracoes.jsx
 import React, { useState, useContext } from "react";
-import { AppContext, ThemeContext } from "../App";
-
-const DEFAULT_SETTINGS = {
-  companyName: "Fideliza Cred",
-  companyCnpj: "",
-  companyEmail: "",
-  companyPhone: "",
-  companyAddress: "",
-  defaultInterestRate: 5,
-  defaultInterestType: "compound",
-  defaultPenaltyRate: 2,
-  defaultMoraRate: 0.033,
-  emailNotifications: true,
-  autoBackup: true,
-  weeklyReports: false,
-};
+import { AppContext } from "../App";
 
 function Configuracoes() {
   const { settings, saveSettings, addToast } = useContext(AppContext);
-  const { theme, toggleTheme } = useContext(ThemeContext);
 
   const [profile, setProfile] = useState({
-    companyName: settings.companyName || DEFAULT_SETTINGS.companyName,
+    companyName: settings.companyName || "Fideliza Cred",
     companyCnpj: settings.companyCnpj || "",
     companyEmail: settings.companyEmail || "",
     companyPhone: settings.companyPhone || "",
@@ -30,16 +14,15 @@ function Configuracoes() {
   });
 
   const [rates, setRates] = useState({
-    defaultInterestRate: settings.defaultInterestRate ?? DEFAULT_SETTINGS.defaultInterestRate,
-    defaultInterestType: settings.defaultInterestType ?? DEFAULT_SETTINGS.defaultInterestType,
-    defaultPenaltyRate: settings.defaultPenaltyRate ?? DEFAULT_SETTINGS.defaultPenaltyRate,
-    defaultMoraRate: settings.defaultMoraRate ?? DEFAULT_SETTINGS.defaultMoraRate,
+    defaultInterestRate: settings.defaultInterestRate ?? 5,
+    defaultPenaltyRate: settings.defaultPenaltyRate ?? 2,
+    defaultMoraRate: settings.defaultMoraRate ?? 0.033,
   });
 
   const [system, setSystem] = useState({
-    emailNotifications: settings.emailNotifications ?? DEFAULT_SETTINGS.emailNotifications,
-    autoBackup: settings.autoBackup ?? DEFAULT_SETTINGS.autoBackup,
-    weeklyReports: settings.weeklyReports ?? DEFAULT_SETTINGS.weeklyReports,
+    emailNotifications: settings.emailNotifications ?? true,
+    autoBackup: settings.autoBackup ?? true,
+    weeklyReports: settings.weeklyReports ?? false,
   });
 
   const handleSaveProfile = (e) => {
@@ -57,30 +40,6 @@ function Configuracoes() {
   const handleSaveSystem = () => {
     saveSettings(system);
     addToast("Configurações do sistema salvas!", "success");
-  };
-
-  const handleRestoreDefaults = () => {
-    const defaults = { ...DEFAULT_SETTINGS };
-    setProfile({
-      companyName: defaults.companyName,
-      companyCnpj: defaults.companyCnpj,
-      companyEmail: defaults.companyEmail,
-      companyPhone: defaults.companyPhone,
-      companyAddress: defaults.companyAddress,
-    });
-    setRates({
-      defaultInterestRate: defaults.defaultInterestRate,
-      defaultInterestType: defaults.defaultInterestType,
-      defaultPenaltyRate: defaults.defaultPenaltyRate,
-      defaultMoraRate: defaults.defaultMoraRate,
-    });
-    setSystem({
-      emailNotifications: defaults.emailNotifications,
-      autoBackup: defaults.autoBackup,
-      weeklyReports: defaults.weeklyReports,
-    });
-    saveSettings(defaults);
-    addToast("Configurações restauradas para os padrões!", "success");
   };
 
   const handleExportData = () => {
@@ -104,11 +63,6 @@ function Configuracoes() {
         <div>
           <h2>Configurações</h2>
           <p className="page-desc">Preferências e parâmetros do sistema</p>
-        </div>
-        <div className="header-actions">
-          <button className="btn btn-outline btn-sm" onClick={handleRestoreDefaults}>
-            🔄 Restaurar Padrões
-          </button>
         </div>
       </div>
 
@@ -190,16 +144,6 @@ function Configuracoes() {
                 </small>
               </div>
               <div className="form-group">
-                <label>Tipo de Juros Padrão</label>
-                <select
-                  value={rates.defaultInterestType}
-                  onChange={(e) => setRates({ ...rates, defaultInterestType: e.target.value })}
-                >
-                  <option value="compound">Juros Composto (Tabela Price)</option>
-                  <option value="simple">Juros Simples</option>
-                </select>
-              </div>
-              <div className="form-group">
                 <label>Multa por Atraso (% sobre a parcela)</label>
                 <input
                   type="number"
@@ -237,20 +181,9 @@ function Configuracoes() {
         {/* System Settings */}
         <div className="card">
           <div className="card-header">
-            <h3>Preferências</h3>
+            <h3>Sistema</h3>
           </div>
           <div className="card-body">
-            <div className="setting-row">
-              Tema: {theme === "dark" ? "Escuro 🌙" : "Claro ☀️"}
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={theme === "dark"}
-                  onChange={toggleTheme}
-                />
-                <span className="toggle-slider"></span>
-              </label>
-            </div>
             {[
               { key: "emailNotifications", label: "Notificações por e-mail" },
               { key: "autoBackup", label: "Backup automático" },

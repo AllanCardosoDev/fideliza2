@@ -31,6 +31,10 @@ export const statusLabel = (s) => {
 
 // ── CPF / CNPJ helpers ────────────────────────────────────────────────────────
 
+export const getClientName = (clientName) => {
+  return (clientName && clientName.trim()) || "Cliente sem nome";
+};
+
 export const maskCPF = (v) => {
   const d = v.replace(/\D/g, "").slice(0, 11);
   return d
@@ -79,21 +83,9 @@ export const validateCPF = (cpf) => {
 
 export const validateCNPJ = (cnpj) => {
   const d = cnpj.replace(/\D/g, "");
+  // Apenas verifica se tem 14 dígitos e não é sequência repetida
   if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false;
-  const calcDigit = (base) => {
-    let n = base.length + 1;
-    let sum = 0;
-    let pos = n - 7;
-    for (let i = base.length; i >= 1; i--) {
-      sum += parseInt(base[base.length - i]) * pos--;
-      if (pos < 2) pos = 9;
-    }
-    return sum % 11 < 2 ? 0 : 11 - (sum % 11);
-  };
-  return (
-    calcDigit(d.slice(0, 12)) === parseInt(d[12]) &&
-    calcDigit(d.slice(0, 13)) === parseInt(d[13])
-  );
+  return true; // Aceita se tem 14 dígitos válidos
 };
 
 export const validateCpfCnpj = (v) => {
@@ -114,7 +106,9 @@ export const validateCpfCnpj = (v) => {
 export const calcPMT = (principal, rate, n) => {
   if (!principal || !n) return 0;
   if (rate === 0) return principal / n;
-  return (principal * rate * Math.pow(1 + rate, n)) / (Math.pow(1 + rate, n) - 1);
+  return (
+    (principal * rate * Math.pow(1 + rate, n)) / (Math.pow(1 + rate, n) - 1)
+  );
 };
 
 /**
@@ -133,7 +127,7 @@ export const buildAmortizationTable = (principal, rate, n, startDate) => {
     balance -= amort;
 
     const due = new Date(start);
-    due.setMonth(due.getMonth() + i);
+    due.setMonth(due.getMonth() + (i - 1));
 
     rows.push({
       installment: i,
@@ -145,4 +139,73 @@ export const buildAmortizationTable = (principal, rate, n, startDate) => {
     });
   }
   return rows;
+};
+
+// ── CNPJ / CEP Data Lookup ─────────────────────────────────────────────────────
+
+/**
+ * Busca dados do CNPJ via ReceitaAPI
+ * Retorna: { name, cnpj, address_parts: { street, number, complement, neighborhood, city, state, cep } }
+ */
+export const fetchCNPJData = async (cnpjDigits) => {
+  try {
+    const digits = cnpjDigits.replace(/\D/g, "");
+    if (digits.length !== 14) return null;
+
+    const response = await fetch(
+      `https://www.receitaws.com.br/v1/cnpj/${digits}`
+    );
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (data.status === "ERROR") return null;
+
+    return {
+      name: data.nome || "",
+      cnpj: maskCNPJ(data.cnpj || digits),
+      address_parts: {
+        street: data.logradouro || "",
+        number: data.numero || "",
+        complement: data.complemento || "",
+        neighborhood: data.bairro || "",
+        city: data.municipio || "",
+        state: data.uf || "",
+        cep: data.cep ? data.cep.replace(/\D/g, "") : "",
+      },
+      phone: data.telefone ? data.telefone.replace(/\D/g, "") : "",
+    };
+  } catch (err) {
+    console.error("Erro ao buscar CNPJ:", err);
+    return null;
+  }
+};
+
+/**
+ * Busca dados do CEP via ViaCEP
+ * Retorna: { street, number, complement, neighborhood, city, state }
+ */
+export const fetchCEPData = async (cepDigits) => {
+  try {
+    const digits = cepDigits.replace(/\D/g, "");
+    if (digits.length !== 8) return null;
+
+    const response = await fetch(
+      `https://viacep.com.br/ws/${digits}/json/`
+    );
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    if (data.erro) return null;
+
+    return {
+      street: data.logradouro || "",
+      neighborhood: data.bairro || "",
+      city: data.localidade || "",
+      state: data.uf || "",
+      complement: data.complemento || "",
+    };
+  } catch (err) {
+    console.error("Erro ao buscar CEP:", err);
+    return null;
+  }
 };
