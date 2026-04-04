@@ -315,11 +315,10 @@ function ClientForm({
           type="button"
           className={`tab-btn ${activeTab === 3 ? "active" : ""}`}
           onClick={() => setActiveTab(3)}
-          disabled={!editingClientId}
           title={
             editingClientId
               ? "Documentos do cliente"
-              : "Salve o cliente primeiro"
+              : "Salve o cliente para fazer upload de documentos"
           }
         >
           <span>4. Documentos</span>
@@ -684,15 +683,66 @@ function ClientForm({
       )}
 
       {/* Tab 4: Documentos */}
-      {activeTab === 3 && editingClientId && (
+      {activeTab === 3 && (
         <div className="tab-content">
-          <DocumentUpload
-            clientId={editingClientId}
-            clientType={form.client_type}
-            onUploadSuccess={() => {
-              addToast("Documento enviado com sucesso!", "success");
-            }}
-          />
+          {editingClientId ? (
+            <DocumentUpload
+              clientId={editingClientId}
+              clientType={form.client_type}
+              onUploadSuccess={() => {
+                addToast("Documento enviado com sucesso!", "success");
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                padding: "40px 20px",
+                textAlign: "center",
+                backgroundColor: "#f5f5f5",
+                borderRadius: "8px",
+                marginTop: "20px",
+              }}
+            >
+              <div style={{ fontSize: "48px", marginBottom: "10px" }}>📄</div>
+              <h3>Documentos</h3>
+              <p style={{ color: "#666", marginTop: "10px" }}>
+                Salve o cliente antes de adicionar documentos.
+              </p>
+              <p style={{ fontSize: "13px", color: "#999", marginTop: "20px" }}>
+                Após salvar, você poderá fazer upload de:
+              </p>
+              <div
+                style={{
+                  marginTop: "15px",
+                  textAlign: "left",
+                  display: "inline-block",
+                  backgroundColor: "white",
+                  padding: "15px 20px",
+                  borderRadius: "6px",
+                  fontSize: "13px",
+                }}
+              >
+                <div>
+                  <strong>Tipo: {form.client_type === "empresa" ? "Pessoa Jurídica" : "Pessoa Física"}</strong>
+                </div>
+                <div style={{ marginTop: "10px", color: "#666" }}>
+                  {form.client_type === "empresa" ? (
+                    <>
+                      • CNPJ, Contrato Social, Alvará<br />
+                      • Inscrição Estadual, Comprovantes<br />
+                      • Balanço Patrimonial, RG dos Sócios
+                    </>
+                  ) : (
+                    <>
+                      • RG, CPF, Comprovante de Renda<br />
+                      • Comprovante de Endereço<br />
+                      • CNH, Extrato Bancário e mais
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
