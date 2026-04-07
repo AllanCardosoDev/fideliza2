@@ -1,16 +1,63 @@
 // src/components/TopBar.jsx
-import React, { useContext, useState } from "react";
+import React, { useContext, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppContext, ThemeContext } from "../App";
 
 function TopBar() {
-  const { notifications } = useContext(AppContext);
+  const { notifications, markNotificationAsRead, clearAllNotifications, userRole, currentUser, clients } = useContext(AppContext);
   const { theme, toggleTheme } = useContext(ThemeContext);
+  const navigate = useNavigate();
   const [showNotifications, setShowNotifications] = useState(false);
 
-  const unreadNotifications = notifications.filter((n) => !n.read).length;
+  // Define which clients this employee owns
+  const myClientNames = useMemo(() => {
+    if (userRole === "admin" || userRole === "supervisor") return null;
+    return clients
+      .filter((c) => c.created_by === currentUser?.id || c.owner_id === currentUser?.id)
+      .map(c => c.name.toLowerCase());
+  }, [userRole, clients, currentUser]);
+
+  const isNotifAccessible = (notif) => {
+    const text = (notif.message || notif.text || "").toLowerCase();
+    const isAdminOnly = text.includes("[admin]") || text.includes("revisão pendente") || text.includes("aguardando análise");
+    
+    if (userRole === "admin" || userRole === "supervisor") {
+      // Admins see everything
+      return true;
+    } else {
+      // Employees don't see Admin-only alerts
+      if (isAdminOnly) return false;
+      // Employees only see alerts referencing their own clients
+      if (!myClientNames || myClientNames.length === 0) return false;
+      return myClientNames.some(name => text.includes(name));
+    }
+  };
+
+  const unreadList = notifications.filter((n) => !n.read && isNotifAccessible(n));
+  const unreadCount = unreadList.length;
 
   const handleNotificationClick = () => {
     setShowNotifications(!showNotifications);
+  };
+
+  const handleItemClick = async (notif) => {
+    if (notif.id) {
+      markNotificationAsRead(notif.id);
+    }
+    setShowNotifications(false);
+    
+    const text = (notif.message || notif.text || "").toLowerCase();
+    if (notif.link) {
+      navigate(notif.link);
+    } else if (text.includes("parcela") || text.includes("atrasad") || text.includes("cobrança")) {
+      navigate("/cobrancas");
+    } else if (text.includes("empréstimo") || text.includes("requisição") || text.includes("crédito")) {
+      navigate("/emprestimos");
+    } else if (text.includes("cliente")) {
+      navigate("/clientes");
+    } else if (text.includes("transação")) {
+      navigate("/financeiro");
+    }
   };
 
   const handleLogout = () => {
@@ -57,22 +104,32 @@ function TopBar() {
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
               <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
-            {unreadNotifications > 0 && (
-              <span className="notif-count">{unreadNotifications}</span>
+            {unreadCount > 0 && (
+              <span className="notif-count">{unreadCount}</span>
             )}
           </button>
           {showNotifications && (
             <div className="notif-dropdown">
               <div className="notif-header">
-                <h4>Notificações ({unreadNotifications})</h4>
-                <button className="btn-link">Marcar todas como lidas</button>
+                <h4>Notificações ({unreadCount})</h4>
+                <button className="btn-link" onClick={(e) => { e.stopPropagation(); clearAllNotifications(); setShowNotifications(false); }}>Marcar todas como lidas</button>
               </div>
               <div className="notif-list">
-                {notifications.length > 0 ? (
-                  notifications.map((notif) => (
-                    <div key={notif.id} className="notif-item">
-                      {notif.message}
-                      <span className="notif-time">Há 5 minutos</span>
+                {unreadList.length > 0 ? (
+                  unreadList.map((notif) => (
+                    <div 
+                      key={notif.id} 
+                      className="notif-item" 
+                      onClick={() => handleItemClick(notif)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <div className={`notif-dot ${notif.type || "blue"}`}></div>
+                      <div className="notif-text">
+                        <div className="tx-desc">{(notif.message || notif.text).replace(/\[ADMIN\] /gi, "")}</div>
+                        <span className="notif-time">
+                          {notif.created_at ? new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Agora'}
+                        </span>
+                      </div>
                     </div>
                   ))
                 ) : (

@@ -2,6 +2,7 @@
 import React, { useContext, useState, useMemo, useCallback } from "react";
 import { AppContext } from "../App";
 import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
+import { buildInstallments } from "../utils/finance";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -22,51 +23,7 @@ function calcLateFees(amount, dueDate, penaltyRate = 2, moraRate = 0.033) {
   return { daysLate, penalty, mora, total: amount + penalty + mora };
 }
 
-function buildInstallments(loans, today) {
-  const items = [];
-  loans.forEach((loan) => {
-    if (!loan.start_date) return;
-    const v = Number(loan.value) || 0;
-    const rate = (Number(loan.interest_rate) || 0) / 100;
-    const n = Number(loan.installments) || 0;
-    const paid = Number(loan.paid) || 0;
-    if (!v || !n) return;
-
-    const pmt = calcPMT(v, rate, n);
-    const start = new Date(loan.start_date + "T00:00:00");
-
-    for (let i = 1; i <= n; i++) {
-      const due = new Date(start);
-      due.setMonth(due.getMonth() + (i - 1));
-      const dueDate = due.toISOString().split("T")[0];
-
-      let status;
-      if (i <= paid) {
-        status = "paid";
-      } else if (due < today) {
-        status = "overdue";
-      } else {
-        status = "due";
-      }
-
-      items.push({
-        id: `${loan.id}-${i}`,
-        loanId: loan.id,
-        clientId: loan.client_id,
-        client: getClientName(loan.client),
-        installmentNo: i,
-        totalInstallments: n,
-        dueDate,
-        due,
-        amount: pmt,
-        status,
-        loanPaid: paid,
-        interestRate: loan.interest_rate,
-      });
-    }
-  });
-  return items.sort((a, b) => a.due - b.due);
-}
+// Using unified buildInstallments from finance.js
 
 // ── Payment Form ──────────────────────────────────────────────────────────────
 
@@ -398,8 +355,18 @@ const FILTER_STATUS = [
 ];
 
 function Recebimentos() {
-  const { loans, clients, editLoan, addToast, openModal, closeModal, settings, currentUser, userRole } =
-    useContext(AppContext);
+  const {
+    loans,
+    clients,
+    editLoan,
+    addToast,
+    openModal,
+    closeModal,
+    settings,
+    currentUser,
+    userRole,
+    reloadLoans,
+  } = useContext(AppContext);
 
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -420,9 +387,12 @@ function Recebimentos() {
   const accessibleLoans = useMemo(() => {
     if (userRole === "employee" && currentUser?.id && clients) {
       const myClientIds = clients
-        .filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id)
-        .map(c => c.id);
-      return loans.filter(l => myClientIds.includes(l.client_id));
+        .filter(
+          (c) =>
+            c.created_by === currentUser.id || c.owner_id === currentUser.id,
+        )
+        .map((c) => c.id);
+      return loans.filter((l) => myClientIds.includes(l.client_id));
     }
     return loans;
   }, [loans, clients, currentUser, userRole]);
@@ -529,6 +499,11 @@ function Recebimentos() {
                 "success",
               );
 
+              // Reload loans to update alerts
+              if (reloadLoans) {
+                await reloadLoans();
+              }
+
               // Show receipt option
               setTimeout(() => {
                 openModal(
@@ -614,6 +589,11 @@ function Recebimentos() {
 
                   closeModal();
                   addToast("Pagamento estornado com sucesso.", "success");
+
+                  // Reload loans to update alerts
+                  if (reloadLoans) {
+                    await reloadLoans();
+                  }
                 } catch (err) {
                   addToast("Erro ao estornar: " + (err.message || ""), "error");
                 }
@@ -625,7 +605,17 @@ function Recebimentos() {
         </div>,
       );
     },
-    [loans, editLoan, payments, savePayments, openModal, closeModal, addToast],
+    [
+      loans,
+      editLoan,
+      payments,
+      savePayments,
+      openModal,
+      closeModal,
+      addToast,
+      reloadLoans,
+      settings,
+    ],
   );
 
   const handleViewReceipt = useCallback(

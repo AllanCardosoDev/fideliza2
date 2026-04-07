@@ -3,15 +3,32 @@ import autoTable from "jspdf-autotable";
 import { fmt, buildAmortizationTable, calcPMT } from "./helpers";
 
 /**
- * Generates a contract protocol number in format MMDD/NNNN/YYYY
- * Example: 0403/0001/2026 (April 3, 1st contract of 2026)
+ * Helper to convert YYYY-MM-DD to DD/MM/YYYY
+ */
+const formatDateToDDMMYYYY = (dateStr) => {
+  if (!dateStr || dateStr === "—") return dateStr;
+  // Parse string no formato YYYY-MM-DD: "2026-05-04"
+  // Retorn DD/MM/YYYY: "04/05/2026"
+  const parts = String(dateStr).split("-");
+  if (parts.length === 3) {
+    const day = parts[2]; // 04
+    const month = parts[1]; // 05
+    const year = parts[0]; // 2026
+    return day + "/" + month + "/" + year;
+  }
+  return dateStr;
+};
+
+/**
+ * Generates a contract protocol number in format DD.MM/NNNN/YYYY
+ * Example: 07.01/0023/2026 (January 7, 23rd contract of 2026)
  */
 export const generateContractProtocol = (sequenceNumber, date = new Date()) => {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const year = date.getFullYear();
   const seq = String(sequenceNumber).padStart(4, "0");
-  return `${month}${day}/${seq}/${year}`;
+  return `${day}.${month}/${seq}/${year}`;
 };
 
 /**
@@ -22,14 +39,14 @@ export const getNextContractNumber = (loans = [], date = new Date()) => {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   const year = date.getFullYear();
-  const prefix = `${month}${day}`; // e.g., "0403"
-  
+  const prefix = `${day}.${month}/`; // e.g., "07.01/"
+
   // Count protocols that start with today's date
   const todaysProtocols = loans.filter((loan) => {
     if (!loan.protocol) return false;
     return loan.protocol.startsWith(prefix);
   });
-  
+
   return todaysProtocols.length + 1;
 };
 
@@ -65,8 +82,10 @@ export const generateLoanPDF = (loan, client) => {
   doc.setTextColor(22, 163, 74);
   doc.setFont(undefined, "bold");
   doc.setFontSize(14);
-  doc.text(`Protocolo: ${loan.protocol || "N/A"}`, pageWidth / 2, yPos + 3, { align: "center" });
-  
+  doc.text(`Protocolo: ${loan.protocol || "N/A"}`, pageWidth / 2, yPos + 3, {
+    align: "center",
+  });
+
   yPos += 20;
 
   // ════ Two-column layout: Client Info & Loan Details ════
@@ -79,7 +98,7 @@ export const generateLoanPDF = (loan, client) => {
   doc.setFont(undefined, "normal");
   doc.setFontSize(10);
   yPos += 8;
-  
+
   doc.text(`Nome: ${client.name || "—"}`, margin, yPos);
   yPos += 6;
   doc.text(`CPF: ${client.cpf || "—"}`, margin, yPos);
@@ -95,12 +114,12 @@ export const generateLoanPDF = (loan, client) => {
   doc.text("DETALHES DO EMPRÉSTIMO", rightCol, yPos - 20);
   doc.setFont(undefined, "normal");
   doc.setFontSize(10);
-  
+
   const loanValue = Number(loan.value) || 0;
   const rate = Number(loan.interest_rate) || 0;
   const installments = Number(loan.installments) || 1;
   const pmt = calcPMT(loanValue, rate / 100, installments);
-  
+
   doc.text(`Valor: ${fmt(loanValue)}`, rightCol, yPos - 14);
   doc.text(`Taxa (a.m.): ${rate.toFixed(2)}%`, rightCol, yPos - 8);
   doc.text(`Parcelas: ${installments}`, rightCol, yPos - 2);
@@ -113,18 +132,22 @@ export const generateLoanPDF = (loan, client) => {
   doc.setFont(undefined, "bold");
   doc.setFontSize(11);
   doc.setTextColor(22, 163, 74);
-  
+
   const totalReceived = loanValue;
   const totalToPay = pmt * installments;
-  
+
   doc.text(`Valor a Receber: ${fmt(totalReceived)}`, margin + 5, yPos + 6);
   doc.text(`Valor de Cada Parcela: ${fmt(pmt)}`, pageWidth / 2, yPos + 6);
-  
+
   // Note about hidden total
   doc.setFontSize(8);
   doc.setFont(undefined, "italic");
   doc.setTextColor(100, 116, 139);
-  doc.text("* Valor total a pagar não incluído neste documento", margin + 5, yPos + 14);
+  doc.text(
+    "* Valor total a pagar não incluído neste documento",
+    margin + 5,
+    yPos + 14,
+  );
 
   yPos += 25;
 
@@ -136,14 +159,21 @@ export const generateLoanPDF = (loan, client) => {
   yPos += 8;
 
   // Build amortization table for first 10 installments
-  const amortization = buildAmortizationTable(loanValue, rate / 100, installments, loan.start_date || new Date().toISOString().split("T")[0]);
-  const scheduleRows = amortization.slice(0, 10).map((row) => [
-    row.installment,
-    row.dueDate,
-    fmt(row.payment),
-    fmt(row.interest),
-    fmt(row.balance),
-  ]);
+  const amortization = buildAmortizationTable(
+    loanValue,
+    rate / 100,
+    installments,
+    loan.start_date || new Date().toISOString().split("T")[0],
+  );
+  const scheduleRows = amortization
+    .slice(0, 10)
+    .map((row) => [
+      row.installment,
+      formatDateToDDMMYYYY(row.dueDate),
+      fmt(row.payment),
+      fmt(row.interest),
+      fmt(row.balance),
+    ]);
 
   autoTable(doc, {
     head: [["Parcela", "Vencimento", "Pagamento", "Juros", "Saldo"]],
@@ -202,7 +232,12 @@ export const generateLoanPDF = (loan, client) => {
   // ════ Footer ════
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text(`FidelizaCred © 2026 | Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`, pageWidth / 2, pageHeight - 5, { align: "center" });
+  doc.text(
+    `FidelizaCred © 2026 | Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`,
+    pageWidth / 2,
+    pageHeight - 5,
+    { align: "center" },
+  );
 
   // Save PDF
   const filename = `contrato_${loan.protocol || loan.id}_${new Date().toISOString().split("T")[0]}.pdf`;

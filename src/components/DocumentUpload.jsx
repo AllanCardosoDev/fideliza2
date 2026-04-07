@@ -5,10 +5,12 @@ export function DocumentUpload({
   clientId,
   clientType = "autonomo",
   onUploadSuccess,
+  currentUser = null,
 }) {
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [selectedType, setSelectedType] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
   // Documentos para Pessoa Física (PF/Autônomo)
@@ -90,7 +92,9 @@ export function DocumentUpload({
 
     // Validações
     if (file.size > 10 * 1024 * 1024) {
-      alert("❌ Arquivo muito grande (máximo: 10MB)");
+      const msg = "❌ Arquivo muito grande (máximo: 10MB)";
+      setUploadError(msg);
+      alert(msg);
       return;
     }
 
@@ -103,56 +107,128 @@ export function DocumentUpload({
     ];
 
     if (!validTypes.includes(file.type)) {
-      alert("❌ Tipo não permitido. Use: PDF, JPG, PNG, DOC, DOCX");
+      const msg = "❌ Tipo não permitido. Use: PDF, JPG, PNG, DOC, DOCX";
+      setUploadError(msg);
+      alert(msg);
       return;
     }
 
     try {
       setLoading(true);
+      setUploadError(null);
+
+      console.log("📤 Iniciando upload:", {
+        clientId,
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type,
+        documentType: selectedType,
+        employeeId: currentUser?.id || "sem-user",
+      });
 
       // 1. Upload para Supabase Storage
       const timestamp = Date.now();
       const fileName = `client_${clientId}_${timestamp}_${file.name}`;
       const path = `${clientId}/${fileName}`;
 
+      console.log("📁 Caminho do arquivo:", path);
+
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from("documents")
         .upload(path, file);
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        console.error("❌ Erro de upload:", uploadError);
+
+        // Verificar se é erro de bucket não encontrado
+        if (
+          uploadError.message?.includes("Bucket not found") ||
+          uploadError.statusCode === 400
+        ) {
+          const errorMsg =
+            "❌ ERRO: Bucket 'documents' não existe no Supabase!\n\n" +
+            "Para resolver:\n" +
+            "1. Abra: https://supabase.com/dashboard\n" +
+            "2. Vá em: Storage > Create new bucket\n" +
+            "3. Nome: 'documents' (minúsculas)\n" +
+            "4. Privacy: 'Private'\n" +
+            "5. Clique: Create Bucket\n\n" +
+            "Depois recarregue a página (F5) e tente novamente.";
+          throw new Error(errorMsg);
+        }
+
+        throw new Error(
+          uploadError.message || "Erro ao fazer upload do arquivo",
+        );
+      }
+
+      console.log("✅ Upload concluído:", uploadData);
 
       // 2. Obter URL pública
       const {
         data: { publicUrl },
       } = supabase.storage.from("documents").getPublicUrl(path);
 
-      // 3. Salvar referência no banco de dados
-      const { error: dbError } = await supabase.from("documents").insert([
-        {
-          client_id: clientId,
-          document_type: selectedType,
-          file_name: file.name,
-          file_url: publicUrl,
-          file_size: file.size,
-          mime_type: file.type,
-          employee_id: 1,
-        },
-      ]);
+      console.log("🔗 URL pública:", publicUrl);
 
-      if (dbError) throw dbError;
+      if (!publicUrl) {
+        throw new Error("Não foi possível obter a URL do arquivo");
+      }
 
-      alert("✅ Documento enviado com sucesso!");
+      // 3. Salvar metadados na tabela documents
+      console.log("💾 Salvando documento no banco de dados:", {
+        client_id: clientId,
+        employee_id: currentUser?.id || null,
+        document_type: selectedType,
+        file_name: file.name,
+        file_url: publicUrl,
+        file_size: file.size,
+        mime_type: file.type,
+      });
 
-      // Atualizar lista
-      fetchDocuments();
-      if (onUploadSuccess) onUploadSuccess();
+      const { data: dbData, error: dbError } = await supabase
+        .from("documents")
+        .insert([
+          {
+            client_id: clientId,
+            employee_id: currentUser?.id || null,
+            document_type: selectedType,
+            file_name: file.name,
+            file_url: publicUrl,
+            file_size: file.size,
+            mime_type: file.type,
+          },
+        ])
+        .select();
 
-      // Limpar input e reset tipo
+      if (dbError) {
+        console.error("❌ Erro ao salvar documento no BD:", dbError);
+        throw new Error(
+          dbError.message || "Erro ao salvar documento no banco de dados",
+        );
+      }
+
+      console.log("✅ Documento salvo com sucesso no BD:", dbData);
+
+      // ✅ Sucesso: Arquivo foi enviado e salvo!
+      alert(
+        "✅ Documento enviado e salvo com sucesso!\n\nArquivo: Storage/documents\nRegistro: Banco de Dados",
+      );
+
+      // Reset UI
       if (fileInputRef.current) fileInputRef.current.value = "";
-      setSelectedType("RG");
+      setSelectedType(clientType === "empresa" ? "CNPJ" : "RG");
+
+      // Recarregar lista de documentos
+      await fetchDocuments();
+
+      // Chamar callback após tudo estar concluído
+      if (onUploadSuccess) onUploadSuccess();
     } catch (error) {
-      console.error("Erro ao fazer upload:", error);
-      alert("❌ Erro ao fazer upload do documento");
+      console.error("❌ Erro ao fazer upload:", error);
+      const errorMsg = error?.message || "Erro ao fazer upload do documento";
+      setUploadError(errorMsg);
+      alert(`❌ ${errorMsg}`);
     } finally {
       setLoading(false);
     }
@@ -167,13 +243,17 @@ export function DocumentUpload({
         .delete()
         .eq("id", docId);
 
-      if (error) throw error;
+      if (error) {
+        throw new Error(error.message || "Erro ao deletar documento");
+      }
 
       alert("✅ Documento deletado");
-      fetchDocuments();
+      await fetchDocuments();
     } catch (error) {
       console.error("Erro ao deletar:", error);
-      alert("❌ Erro ao deletar documento");
+      const errorMsg = error?.message || "Erro ao deletar documento";
+      setUploadError(errorMsg);
+      alert(`❌ ${errorMsg}`);
     }
   };
 
@@ -214,6 +294,23 @@ export function DocumentUpload({
             : "👤 Pessoa Física"}
         </span>
       </div>
+
+      {/* Erro de Upload */}
+      {uploadError && (
+        <div
+          style={{
+            padding: "12px",
+            backgroundColor: "#ffebee",
+            borderLeft: "4px solid #f44336",
+            borderRadius: "4px",
+            marginBottom: "15px",
+            color: "#c62828",
+            fontWeight: "500",
+          }}
+        >
+          ❌ {uploadError}
+        </div>
+      )}
 
       {/* Aviso de Documentos Pendentes */}
       {pendingDocs.length > 0 && (
@@ -265,12 +362,14 @@ export function DocumentUpload({
 
         <div style={{ marginBottom: "12px" }}>
           <label
+            htmlFor="document-type-select"
             style={{ display: "block", marginBottom: "6px", fontWeight: "500" }}
           >
             Tipo de Documento *
           </label>
           <select
-            value={selectedType}
+            id="document-type-select"
+            value={selectedType || ""}
             onChange={(e) => setSelectedType(e.target.value)}
             style={{
               width: "100%",
@@ -330,6 +429,7 @@ export function DocumentUpload({
 
         <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
           <input
+            id="file-input-document"
             ref={fileInputRef}
             type="file"
             onChange={handleFileUpload}
@@ -340,24 +440,47 @@ export function DocumentUpload({
               padding: "8px",
               borderRadius: "4px",
               border: "1px solid #ddd",
+              opacity: loading ? 0.6 : 1,
+              cursor: loading ? "not-allowed" : "pointer",
             }}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
+          <label htmlFor="file-input-document">
+            <button
+              type="button"
+              onClick={() => loading || fileInputRef.current?.click()}
+              disabled={loading}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: loading ? "#999" : "#4CAF50",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: loading ? "not-allowed" : "pointer",
+                whiteSpace: "nowrap",
+                fontWeight: "600",
+                transition: "all 0.2s",
+              }}
+            >
+              {loading ? "⏳ Enviando..." : "📤 Upload"}
+            </button>
+          </label>
+        </div>
+
+        {loading && (
+          <div
             style={{
-              padding: "10px 20px",
-              backgroundColor: loading ? "#ccc" : "#4CAF50",
-              color: "white",
-              border: "none",
+              marginTop: "12px",
+              padding: "10px",
+              backgroundColor: "#e3f2fd",
               borderRadius: "4px",
-              cursor: loading ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
+              fontSize: "13px",
+              color: "#1976d2",
+              fontWeight: "500",
             }}
           >
-            {loading ? "⏳ Enviando..." : "📤 Upload"}
-          </button>
-        </div>
+            ⏳ Processando upload... Por favor, aguarde (não feche esta janela)
+          </div>
+        )}
       </div>
 
       {/* Lista de Documentos */}

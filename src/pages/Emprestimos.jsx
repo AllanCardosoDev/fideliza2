@@ -1,5 +1,6 @@
 // src/pages/Emprestimos.jsx
 import React, { useContext, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
 import {
   fmt,
@@ -8,52 +9,11 @@ import {
   buildAmortizationTable,
   getClientName,
 } from "../utils/helpers";
+import { buildInstallments } from "../utils/finance";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// ── Build Installments (same logic as Cobrancas/Dashboard) ──────────────────
-function buildInstallments(loans, today) {
-  const items = [];
-  loans.forEach((loan) => {
-    if (!loan.start_date) return;
-    const v = Number(loan.value) || 0;
-    const rate = (Number(loan.interest_rate) || 0) / 100;
-    const n = Number(loan.installments) || 0;
-    const paid = Number(loan.paid) || 0;
-    if (!v || !n) return;
-
-    const pmt = calcPMT(v, rate, n);
-    const start = new Date(loan.start_date + "T00:00:00");
-
-    for (let i = 1; i <= n; i++) {
-      const due = new Date(start);
-      due.setMonth(due.getMonth() + (i - 1));
-      const dueDate = due.toISOString().split("T")[0];
-
-      let status;
-      if (i <= paid) {
-        status = "paid";
-      } else if (due < today) {
-        status = "overdue";
-      } else {
-        status = "due";
-      }
-
-      items.push({
-        id: `${loan.id}-${i}`,
-        loanId: loan.id,
-        client: getClientName(loan.client),
-        installmentNo: i,
-        totalInstallments: n,
-        dueDate,
-        due,
-        amount: pmt,
-        status,
-      });
-    }
-  });
-  return items.sort((a, b) => a.due - b.due);
-}
+// Using unified buildInstallments from finance.js
 
 const STATUS_OPTS = [
   { value: "", label: "Todos" },
@@ -426,10 +386,76 @@ function AmortizationModal({ loan, onClose }) {
   );
 }
 
+function RejectForm({ loan, onConfirm, onCancel }) {
+  const [reason, setReason] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    await onConfirm(reason);
+    setIsSubmitting(false);
+  };
+
+  return (
+    <form className="modal-form" onSubmit={handleSubmit}>
+      <div
+        style={{
+          marginBottom: 16,
+          padding: "12px",
+          background: "rgba(255, 60, 60, 0.05)",
+          borderLeft: "4px solid var(--red)",
+          borderRadius: 4,
+        }}
+      >
+        <p style={{ margin: 0, color: "var(--text-dim)" }}>
+          Você está prestes a <strong>cancelar</strong> a solicitação de:
+        </p>
+        <strong style={{ fontSize: "1.1rem", display: "block", marginTop: 4 }}>
+          {getClientName(loan.client)}
+        </strong>
+        <span style={{ fontSize: "0.85rem", color: "var(--text-dim)" }}>
+          Valor solicitado: {fmt(loan.value)}
+        </span>
+      </div>
+      <div className="form-row">
+        <label>Motivo da Rejeição</label>
+        <textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Explique por que o empréstimo foi negado para informar o funcionário..."
+          rows={3}
+          style={{ width: "100%", borderColor: "var(--border)" }}
+          required
+        />
+      </div>
+      <div className="form-actions" style={{ marginTop: 24 }}>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={onCancel}
+          disabled={isSubmitting}
+        >
+          Cancelar
+        </button>
+        <button
+          type="submit"
+          className="btn btn-danger btn-sm"
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? "Cancelando..." : "✗ Rejeitar Empréstimo"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function Emprestimos() {
+  const navigate = useNavigate();
   const {
     loans,
     clients,
+    employees,
     settings,
     openModal,
     closeModal,
@@ -546,6 +572,15 @@ function Emprestimos() {
   };
 
   const handleEdit = (loan) => {
+    // Impedir que funcionários editem empréstimos
+    if (userRole === "employee") {
+      addToast(
+        "Funcionários não podem editar empréstimos. Solicite ao administrador.",
+        "error",
+      );
+      return;
+    }
+
     openModal(
       "Editar Empréstimo",
       <LoanForm
@@ -624,6 +659,18 @@ function Emprestimos() {
   };
 
   const handleRegisterPayment = (loan) => {
+    // Verificar permissão para funcionários
+    if (userRole === "employee") {
+      const currentEmp = employees?.find((e) => e.id === currentUser?.id);
+      if (!currentEmp?.permissions?.can_register_payment) {
+        addToast(
+          "Você não tem permissão para registrar pagamentos. Solicite ao administrador.",
+          "error",
+        );
+        return;
+      }
+    }
+
     const pmt = calcPMT(
       Number(loan.value) || 0,
       (Number(loan.interest_rate) || 0) / 100,
@@ -842,6 +889,18 @@ function Emprestimos() {
     doc.setFontSize(10);
     doc.setFont(undefined, "normal");
 
+    // Protocolo em destaque se existir
+    if (loan.protocol) {
+      doc.setFillColor(255, 243, 205); // Fundo amarelo claro
+      doc.rect(10, yPos - 2, 190, 7, "F");
+      doc.setFont(undefined, "bold");
+      doc.setTextColor(240, 200, 80);
+      doc.text(`Protocolo: ${loan.protocol}`, 12, yPos + 2);
+      doc.setFont(undefined, "normal");
+      doc.setTextColor(0, 0, 0);
+      yPos += 10;
+    }
+
     doc.text(`Contratante: ${getClientName(loan.client)}`, 10, yPos);
     yPos += 6;
     doc.text(`Valor do Empréstimo: ${fmt(loan.value)}`, 10, yPos);
@@ -936,6 +995,20 @@ function Emprestimos() {
           <p className="page-desc">Gerencie os empréstimos concedidos</p>
         </div>
         <div className="header-actions">
+          <button
+            onClick={() => {
+              localStorage.setItem("filterClientsInactive", "true");
+              navigate("/clientes");
+            }}
+            className="btn btn-outline btn-sm"
+            style={{
+              marginRight: 8,
+              borderColor: "var(--blue)",
+              color: "var(--blue)",
+            }}
+          >
+            📋 Inativos
+          </button>
           <button onClick={handleAdd} className="btn btn-gold btn-sm">
             + Novo Empréstimo
           </button>
@@ -1024,44 +1097,125 @@ function Emprestimos() {
                             style={{ color: "var(--green)" }}
                             onClick={() => {
                               openModal(
-                                `Aprovar Requisição — ${getClientName(loan.client)}`,
+                                `Aprovar Requisição`,
                                 <div className="modal-form">
                                   <div
                                     style={{
                                       marginBottom: 16,
-                                      padding: "12px",
+                                      padding: "16px",
                                       background: "var(--bg-primary)",
+                                      border: "1px solid var(--green)",
                                       borderRadius: 8,
+                                      boxShadow:
+                                        "0 4px 12px rgba(40,167,69,0.05)",
                                     }}
                                   >
-                                    <div style={{ marginBottom: 8 }}>
-                                      <span className="text-dim">Cliente:</span>
-                                      <strong style={{ display: "block" }}>
-                                        {getClientName(loan.client)}
-                                      </strong>
-                                    </div>
-                                    <div style={{ marginBottom: 8 }}>
-                                      <span className="text-dim">Valor:</span>
-                                      <strong style={{ display: "block" }}>
-                                        {fmt(loan.value)}
-                                      </strong>
-                                    </div>
-                                    <div>
-                                      <span className="text-dim">
-                                        Parcelas:
-                                      </span>
-                                      <strong style={{ display: "block" }}>
-                                        {loan.installments}x de {fmt(pmt)}
-                                      </strong>
+                                    <h4
+                                      style={{
+                                        color: "var(--green)",
+                                        marginBottom: 12,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 8,
+                                      }}
+                                    >
+                                      <svg
+                                        width="20"
+                                        height="20"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                      >
+                                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                        <polyline points="22 4 12 14.01 9 11.01" />
+                                      </svg>
+                                      Resumo da Aprovação
+                                    </h4>
+                                    <div
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "1fr 1fr",
+                                        gap: 12,
+                                      }}
+                                    >
+                                      <div>
+                                        <span
+                                          className="text-dim"
+                                          style={{
+                                            fontSize: "0.8rem",
+                                            textTransform: "uppercase",
+                                            letterSpacing: 1,
+                                          }}
+                                        >
+                                          Cliente
+                                        </span>
+                                        <strong
+                                          style={{
+                                            display: "block",
+                                            fontSize: "1.05rem",
+                                          }}
+                                        >
+                                          {getClientName(loan.client)}
+                                        </strong>
+                                      </div>
+                                      <div>
+                                        <span
+                                          className="text-dim"
+                                          style={{
+                                            fontSize: "0.8rem",
+                                            textTransform: "uppercase",
+                                            letterSpacing: 1,
+                                          }}
+                                        >
+                                          Valor
+                                        </span>
+                                        <strong
+                                          style={{
+                                            display: "block",
+                                            fontSize: "1.05rem",
+                                            color: "var(--gold)",
+                                          }}
+                                        >
+                                          {fmt(loan.value)}
+                                        </strong>
+                                      </div>
+                                      <div
+                                        style={{
+                                          gridColumn: "1 / -1",
+                                          borderTop: "1px dashed var(--border)",
+                                          paddingTop: 12,
+                                          marginTop: 4,
+                                        }}
+                                      >
+                                        <span
+                                          className="text-dim"
+                                          style={{
+                                            fontSize: "0.8rem",
+                                            textTransform: "uppercase",
+                                            letterSpacing: 1,
+                                          }}
+                                        >
+                                          Condições
+                                        </span>
+                                        <strong style={{ display: "block" }}>
+                                          {loan.installments} parcelas de{" "}
+                                          {fmt(pmt)} ao mês
+                                        </strong>
+                                      </div>
                                     </div>
                                   </div>
                                   <p
                                     style={{
-                                      color: "var(--text-dim)",
-                                      marginBottom: 12,
+                                      color: "var(--text-color)",
+                                      marginBottom: 16,
+                                      fontSize: "0.95rem",
+                                      textAlign: "center",
                                     }}
                                   >
-                                    Confirmar aprovação desta requisição?
+                                    Ao aprovar, o valor de{" "}
+                                    <strong>{fmt(loan.value)}</strong> será
+                                    imediatamente descontado do seu caixa.
                                   </p>
                                   <div className="form-actions">
                                     <button
@@ -1072,6 +1226,11 @@ function Emprestimos() {
                                     </button>
                                     <button
                                       className="btn btn-gold btn-sm"
+                                      style={{
+                                        background: "var(--green)",
+                                        borderColor: "var(--green)",
+                                        color: "white",
+                                      }}
                                       onClick={async () => {
                                         try {
                                           await approveLoan(loan.id);
@@ -1081,7 +1240,7 @@ function Emprestimos() {
                                         }
                                       }}
                                     >
-                                      ✓ Aprovar
+                                      ✓ Confirmar Aprovação
                                     </button>
                                   </div>
                                 </div>,
@@ -1096,37 +1255,19 @@ function Emprestimos() {
                             style={{ color: "var(--red)" }}
                             onClick={() => {
                               openModal(
-                                `Rejeitar Requisição — ${getClientName(loan.client)}`,
-                                <div className="modal-form">
-                                  <p style={{ marginBottom: 16 }}>
-                                    Tem certeza que deseja rejeitar esta
-                                    requisição?
-                                  </p>
-                                  <div className="form-actions">
-                                    <button
-                                      className="btn btn-outline btn-sm"
-                                      onClick={closeModal}
-                                    >
-                                      Cancelar
-                                    </button>
-                                    <button
-                                      className="btn btn-danger btn-sm"
-                                      onClick={async () => {
-                                        try {
-                                          await rejectLoan(
-                                            loan.id,
-                                            "Rejeitado pelo administrador",
-                                          );
-                                          closeModal();
-                                        } catch {
-                                          /* handled */
-                                        }
-                                      }}
-                                    >
-                                      ✗ Rejeitar
-                                    </button>
-                                  </div>
-                                </div>,
+                                `Rejeição de Crédito`,
+                                <RejectForm
+                                  loan={loan}
+                                  onCancel={closeModal}
+                                  onConfirm={async (reason) => {
+                                    try {
+                                      await rejectLoan(loan.id, reason);
+                                      closeModal();
+                                    } catch {
+                                      /* handled */
+                                    }
+                                  }}
+                                />,
                               );
                             }}
                           >
@@ -1369,27 +1510,35 @@ function Emprestimos() {
                         >
                           📄
                         </button>
-                        <button
-                          className="btn-icon"
-                          title="Registrar Pagamento"
-                          onClick={() => handleRegisterPayment(loan)}
-                        >
-                          💰
-                        </button>
-                        <button
-                          className="btn-icon"
-                          title="Editar"
-                          onClick={() => handleEdit(loan)}
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          className="btn-icon"
-                          title="Excluir"
-                          onClick={() => handleDelete(loan)}
-                        >
-                          🗑️
-                        </button>
+                        {(userRole === "admin" ||
+                          employees?.find((e) => e.id === currentUser?.id)
+                            ?.permissions?.can_register_payment) && (
+                          <button
+                            className="btn-icon"
+                            title="Registrar Pagamento"
+                            onClick={() => handleRegisterPayment(loan)}
+                          >
+                            💰
+                          </button>
+                        )}
+                        {userRole === "admin" && (
+                          <button
+                            className="btn-icon"
+                            title="Editar"
+                            onClick={() => handleEdit(loan)}
+                          >
+                            ✏️
+                          </button>
+                        )}
+                        {userRole === "admin" && (
+                          <button
+                            className="btn-icon"
+                            title="Excluir"
+                            onClick={() => handleDelete(loan)}
+                          >
+                            🗑️
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

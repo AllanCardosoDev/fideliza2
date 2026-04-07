@@ -18,47 +18,9 @@ import {
   fetchCNPJData,
   fetchCEPData,
 } from "../utils/helpers";
+import { buildInstallments } from "../utils/finance";
 
-// ── Build Installments (same logic as Cobrancas/Dashboard/Emprestimos) ──────────────────
-function buildInstallments(loans, today) {
-  const items = [];
-  loans.forEach((loan) => {
-    if (!loan.start_date) return;
-    const v = Number(loan.value) || 0;
-    const rate = (Number(loan.interest_rate) || 0) / 100;
-    const n = Number(loan.installments) || 0;
-    const paid = Number(loan.paid) || 0;
-    if (!v || !n) return;
-
-    const pmt = calcPMT(v, rate, n);
-    const start = new Date(loan.start_date + "T00:00:00");
-
-    for (let i = 1; i <= n; i++) {
-      const due = new Date(start);
-      due.setMonth(due.getMonth() + (i - 1));
-      const dueDate = due.toISOString().split("T")[0];
-
-      let status;
-      if (i <= paid) {
-        status = "paid";
-      } else if (due < today) {
-        status = "overdue";
-      } else {
-        status = "due";
-      }
-
-      items.push({
-        id: `${loan.id}-${i}`,
-        loanId: loan.id,
-        clientId: loan.client_id,
-        client: getClientName(loan.client),
-        status,
-        amount: pmt,
-      });
-    }
-  });
-  return items.sort((a, b) => a.loanId - b.loanId);
-}
+// Using unified buildInstallments from finance.js
 
 const STATUS_OPTS = [
   { value: "active", label: "Ativo", cls: "status-active" },
@@ -97,6 +59,7 @@ const EMPTY_FORM = {
   // Status: Default to "inactive" (visually represents pending approval state)
   status: "inactive",
   notes: "",
+  owner_id: "",
 };
 
 const CLIENT_TYPES = [
@@ -125,12 +88,17 @@ const BUSINESS_SEGMENTS = [
 function ClientForm({
   initial = EMPTY_FORM,
   currentUser,
+  userRole,
+  employees,
   onSave,
   onCancel,
   isSaving,
   editingClientId,
 }) {
-  const [form, setForm] = useState(initial);
+  const [form, setForm] = useState({
+    ...initial,
+    owner_id: initial.owner_id || currentUser?.id || "",
+  });
   const [errors, setErrors] = useState({});
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState(null);
@@ -262,8 +230,8 @@ function ClientForm({
       status: form.status,
       notes: form.notes,
       profile: JSON.stringify(profile),
-      created_by: currentUser?.id || null,
-      owner_id: currentUser?.id || null,
+      created_by: initial.created_by || currentUser?.id || null,
+      owner_id: form.owner_id || currentUser?.id || null,
     };
     onSave(payload);
   };
@@ -679,6 +647,40 @@ function ClientForm({
               rows={3}
             />
           </div>
+
+          {(userRole === "admin" || userRole === "supervisor") && (
+            <div
+              className="form-row"
+              style={{
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: "1px dashed var(--border)",
+              }}
+            >
+              <label>Atribuir a Funcionário (Proprietário)</label>
+              <select
+                value={form.owner_id}
+                onChange={(e) => set("owner_id", e.target.value)}
+              >
+                <option value="">Nenhum (Somente Admin)</option>
+                {employees?.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name} ({emp.role})
+                  </option>
+                ))}
+              </select>
+              <p
+                style={{
+                  fontSize: "0.8rem",
+                  color: "var(--text-dim)",
+                  marginTop: 4,
+                }}
+              >
+                Ao atribuir a um funcionário, ele terá acesso total ao cliente e
+                a capacidade de criar empréstimos em seu nome.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -689,8 +691,9 @@ function ClientForm({
             <DocumentUpload
               clientId={editingClientId}
               clientType={form.client_type}
+              currentUser={currentUser}
               onUploadSuccess={() => {
-                addToast("Documento enviado com sucesso!", "success");
+                console.log("✅ Documento enviado com sucesso!");
               }}
             />
           ) : (
@@ -723,20 +726,27 @@ function ClientForm({
                 }}
               >
                 <div>
-                  <strong>Tipo: {form.client_type === "empresa" ? "Pessoa Jurídica" : "Pessoa Física"}</strong>
+                  <strong>
+                    Tipo:{" "}
+                    {form.client_type === "empresa"
+                      ? "Pessoa Jurídica"
+                      : "Pessoa Física"}
+                  </strong>
                 </div>
                 <div style={{ marginTop: "10px", color: "#666" }}>
                   {form.client_type === "empresa" ? (
                     <>
-                      • CNPJ, Contrato Social, Alvará<br />
-                      • Inscrição Estadual, Comprovantes<br />
-                      • Balanço Patrimonial, RG dos Sócios
+                      • CNPJ, Contrato Social, Alvará
+                      <br />
+                      • Inscrição Estadual, Comprovantes
+                      <br />• Balanço Patrimonial, RG dos Sócios
                     </>
                   ) : (
                     <>
-                      • RG, CPF, Comprovante de Renda<br />
-                      • Comprovante de Endereço<br />
-                      • CNH, Extrato Bancário e mais
+                      • RG, CPF, Comprovante de Renda
+                      <br />
+                      • Comprovante de Endereço
+                      <br />• CNH, Extrato Bancário e mais
                     </>
                   )}
                 </div>
@@ -797,12 +807,22 @@ function Clientes() {
     addToast,
     currentUser,
     userRole,
+    employees,
   } = useContext(AppContext);
 
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+
+  // Auto-filter para mostrar Inativos se veio do botão em Empréstimos
+  useEffect(() => {
+    const showInactiveOnly = localStorage.getItem("filterClientsInactive");
+    if (showInactiveOnly) {
+      setFilterStatus("inactive");
+      localStorage.removeItem("filterClientsInactive");
+    }
+  }, []);
 
   // ── Today (fixed reference) ────────────────────────────────────────────────
   const today = useMemo(() => {
@@ -900,12 +920,34 @@ function Clientes() {
     return clientIds.size;
   }, [allInstallments, loans, accessibleClients]);
 
+  // ── Clientes Inativos: aqueles com todos os empréstimos finalizados (paid) ──────────────
+  const inactiveClientsIds = useMemo(() => {
+    const ids = new Set();
+    accessibleClients.forEach((client) => {
+      const clientLoans = loans.filter((l) => l.client_id === client.id);
+      if (clientLoans.length === 0) return; // Sem empréstimos, não é inativo
+
+      // Todos os empréstimos devem estar "paid" para ser inativo
+      const allPaid = clientLoans.every((l) => l.status === "paid");
+      if (allPaid) ids.add(client.id);
+    });
+    return ids;
+  }, [accessibleClients, loans]);
+
   const filtered = accessibleClients.filter((c) => {
     const matchSearch = [c.name, c.email, c.phone, c.cpf_cnpj, c.address]
       .join(" ")
       .toLowerCase()
       .includes(search.toLowerCase());
-    const matchStatus = filterStatus ? c.status === filterStatus : true;
+
+    // Lógica: se filterStatus == "inactive", mostra apenas clientes finalizados
+    let matchStatus = true;
+    if (filterStatus === "inactive") {
+      matchStatus = inactiveClientsIds.has(c.id);
+    } else if (filterStatus) {
+      matchStatus = c.status === filterStatus;
+    }
+
     return matchSearch && matchStatus;
   });
 
@@ -929,6 +971,8 @@ function Clientes() {
       "Novo Cliente",
       <ClientForm
         currentUser={currentUser}
+        userRole={userRole}
+        employees={employees}
         onSave={async (form) => {
           setIsSaving(true);
           try {
@@ -942,7 +986,7 @@ function Clientes() {
         }}
         onCancel={closeModal}
         isSaving={isSaving}
-        editingClientId={client.id}
+        editingClientId={null}
       />,
     );
   };
@@ -952,10 +996,11 @@ function Clientes() {
     let profile = {};
     if (client.profile) {
       try {
-        profile =
+        const parsed =
           typeof client.profile === "string"
             ? JSON.parse(client.profile)
             : client.profile;
+        profile = parsed && typeof parsed === "object" ? parsed : {};
       } catch (e) {
         profile = {};
       }
@@ -972,17 +1017,17 @@ function Clientes() {
           // Etapa 1: Dados Pessoais
           name: client.name || "",
           cpf: profile.cpf
-            ? profile.cpf.includes(".")
-              ? profile.cpf
-              : profile.cpf.replace(
+            ? String(profile.cpf).includes(".")
+              ? String(profile.cpf)
+              : String(profile.cpf).replace(
                   /(\d{3})(\d{3})(\d{3})(\d{2})/,
                   "$1.$2.$3-$4",
                 )
             : "",
           cnpj: profile.cnpj
-            ? profile.cnpj.includes("/")
-              ? profile.cnpj
-              : profile.cnpj.replace(
+            ? String(profile.cnpj).includes("/")
+              ? String(profile.cnpj)
+              : String(profile.cnpj).replace(
                   /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,
                   "$1.$2.$3/$4-$5",
                 )
@@ -1013,7 +1058,12 @@ function Clientes() {
           // Status e Observações
           notes: client.notes || "",
           status: client.status || "active",
+          owner_id: String(client.owner_id || ""),
+          created_by: client.created_by,
         }}
+        userRole={userRole}
+        employees={employees}
+        editingClientId={client.id}
         onSave={async (form) => {
           setIsSaving(true);
           try {
@@ -1507,20 +1557,27 @@ function Clientes() {
                         >
                           💳
                         </button>
-                        <button
-                          className="btn-icon"
-                          title="Editar"
-                          onClick={() => handleEdit(c)}
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          className="btn-icon"
-                          title="Excluir"
-                          onClick={() => handleDelete(c)}
-                        >
-                          🗑️
-                        </button>
+                        {(userRole === "admin" ||
+                          userRole === "supervisor" ||
+                          currentUser?.access_level === "admin" ||
+                          currentUser?.access_level === "supervisor") && (
+                          <>
+                            <button
+                              className="btn-icon"
+                              title="Editar"
+                              onClick={() => handleEdit(c)}
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="btn-icon"
+                              title="Excluir"
+                              onClick={() => handleDelete(c)}
+                            >
+                              🗑️
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   );

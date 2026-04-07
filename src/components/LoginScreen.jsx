@@ -22,7 +22,10 @@ function LoginScreen() {
       setAuthToken("fake-jwt-token");
       localStorage.setItem("fc_token", "fake-jwt-token");
       setCurrentUser({ name: "Administrador", access_level: "admin" });
-      localStorage.setItem("fc_current_user", JSON.stringify({ name: "Administrador", access_level: "admin" }));
+      localStorage.setItem(
+        "fc_current_user",
+        JSON.stringify({ name: "Administrador", access_level: "admin" }),
+      );
       setIsAuthenticated(true);
       navigate("/dashboard");
       return;
@@ -32,7 +35,10 @@ function LoginScreen() {
       setAuthToken("offline");
       localStorage.setItem("fc_token", "offline");
       setCurrentUser({ name: "Demo", access_level: "admin" });
-      localStorage.setItem("fc_current_user", JSON.stringify({ name: "Demo", access_level: "admin" }));
+      localStorage.setItem(
+        "fc_current_user",
+        JSON.stringify({ name: "Demo", access_level: "admin" }),
+      );
       setIsAuthenticated(true);
       navigate("/dashboard");
       return;
@@ -101,7 +107,17 @@ function LoginScreen() {
         <form id="login-form" className="login-form" onSubmit={handleLogin}>
           {error && <p className="error-message">{error}</p>}
           <div className="form-group">
-            <label htmlFor="login-user" style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: 6, display: "block" }}>Usuário</label>
+            <label
+              htmlFor="login-user"
+              style={{
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                marginBottom: 6,
+                display: "block",
+              }}
+            >
+              Usuário
+            </label>
             <div className="input-icon-wrap">
               <svg
                 width="18"
@@ -126,7 +142,17 @@ function LoginScreen() {
             </div>
           </div>
           <div className="form-group">
-            <label htmlFor="login-pass" style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: 6, display: "block" }}>Senha</label>
+            <label
+              htmlFor="login-pass"
+              style={{
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                marginBottom: 6,
+                display: "block",
+              }}
+            >
+              Senha
+            </label>
             <div className="input-icon-wrap">
               <svg
                 width="18"
@@ -150,7 +176,11 @@ function LoginScreen() {
               />
             </div>
           </div>
-          <button type="submit" className="btn btn-gold btn-full" disabled={loading}>
+          <button
+            type="submit"
+            className="btn btn-gold btn-full"
+            disabled={loading}
+          >
             {loading ? "Entrando..." : "Entrar"}
           </button>
         </form>

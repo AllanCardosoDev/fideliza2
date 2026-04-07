@@ -17,6 +17,9 @@ const EMPTY_EMPLOYEE = {
   username: "",
   password: "",
   access_level: "employee",
+  permissions: {
+    can_register_payment: false,
+  },
 };
 
 const STATUS_OPTS = [
@@ -30,7 +33,12 @@ const ACCESS_OPTS = [
   { value: "admin", label: "Administrador" },
 ];
 
-function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) {
+function EmployeeForm({
+  initial = EMPTY_EMPLOYEE,
+  onSave,
+  onCancel,
+  isSaving,
+}) {
   const [form, setForm] = useState(initial);
   const [errors, setErrors] = useState({});
   const [showPass, setShowPass] = useState(false);
@@ -54,7 +62,10 @@ function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) 
     if (validate()) {
       onSave({
         ...form,
-        salary: form.salary !== "" ? parseFloat(String(form.salary).replace(",", ".")) : null,
+        salary:
+          form.salary !== ""
+            ? parseFloat(String(form.salary).replace(",", "."))
+            : null,
       });
     }
   };
@@ -138,23 +149,88 @@ function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) 
       <div className="form-row-2">
         <div className="form-row">
           <label>Status</label>
-          <select value={form.status} onChange={(e) => set("status", e.target.value)}>
+          <select
+            value={form.status}
+            onChange={(e) => set("status", e.target.value)}
+          >
             {STATUS_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
         <div className="form-row">
           <label>Nível de Acesso</label>
-          <select value={form.access_level} onChange={(e) => set("access_level", e.target.value)}>
+          <select
+            value={form.access_level}
+            onChange={(e) => set("access_level", e.target.value)}
+          >
             {ACCESS_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
       </div>
-      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-        <p style={{ fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 8 }}>
+      <div
+        style={{
+          borderTop: "1px solid var(--border)",
+          paddingTop: 12,
+          marginTop: 4,
+          marginBottom: 16,
+        }}
+      >
+        <p
+          style={{
+            fontSize: "0.85rem",
+            fontWeight: 600,
+            color: "var(--text)",
+            marginBottom: 12,
+          }}
+        >
+          🔐 Permissões
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              cursor: "pointer",
+              fontSize: "0.95rem",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={form.permissions?.can_register_payment || false}
+              onChange={(e) =>
+                set("permissions", {
+                  ...form.permissions,
+                  can_register_payment: e.target.checked,
+                })
+              }
+              style={{ cursor: "pointer", width: 16, height: 16 }}
+            />
+            <span>Registrar Pagamentos (Cobrança)</span>
+          </label>
+        </div>
+      </div>
+      <div
+        style={{
+          borderTop: "1px solid var(--border)",
+          paddingTop: 12,
+          marginTop: 4,
+        }}
+      >
+        <p
+          style={{
+            fontSize: "0.78rem",
+            color: "var(--text-dim)",
+            marginBottom: 8,
+          }}
+        >
           Credenciais de Login (opcional)
         </p>
         <div className="form-row-2">
@@ -183,8 +259,14 @@ function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) 
                 type="button"
                 onClick={() => setShowPass((p) => !p)}
                 style={{
-                  position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                  background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)",
+                  position: "absolute",
+                  right: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-dim)",
                   fontSize: 14,
                 }}
               >
@@ -195,7 +277,12 @@ function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) 
         </div>
       </div>
       <div className="modal-actions">
-        <button type="button" className="btn btn-outline" onClick={onCancel} disabled={isSaving}>
+        <button
+          type="button"
+          className="btn btn-outline"
+          onClick={onCancel}
+          disabled={isSaving}
+        >
           Cancelar
         </button>
         <button type="submit" className="btn btn-gold" disabled={isSaving}>
@@ -208,9 +295,14 @@ function EmployeeForm({ initial = EMPTY_EMPLOYEE, onSave, onCancel, isSaving }) 
 
 function Funcionarios() {
   const {
-    employees, setEmployees,
-    openModal, closeModal, addToast,
-    createEmployeeRecord, editEmployeeRecord, removeEmployeeRecord,
+    employees,
+    setEmployees,
+    openModal,
+    closeModal,
+    addToast,
+    createEmployeeRecord,
+    editEmployeeRecord,
+    removeEmployeeRecord,
     authToken,
   } = useContext(AppContext);
 
@@ -254,57 +346,96 @@ function Funcionarios() {
     );
   }, [openModal, closeModal, setEmployees, addToast]);
 
-  const handleEditEmployee = useCallback((emp) => {
-    openModal(
-      "Editar Funcionário",
-      <EmployeeForm
-        initial={{
-          ...EMPTY_EMPLOYEE,
-          ...emp,
-          salary: emp.salary ?? "",
-          department: emp.department ?? "",
-          admission: emp.admission ?? today(),
-          username: emp.username ?? "",
-          password: emp.password ?? "",
-          access_level: emp.access_level ?? "employee",
-        }}
-        onSave={async (data) => {
-          setIsSaving(true);
-          try {
-            await editEmployeeRecord(emp.id, data);
+  const handleEditEmployeeDemo = useCallback(
+    (emp) => {
+      openModal(
+        "Editar Funcionário",
+        <EmployeeForm
+          initial={{
+            ...EMPTY_EMPLOYEE,
+            ...emp,
+            salary: emp.salary ?? "",
+            department: emp.department ?? "",
+            admission: emp.admission ?? today(),
+            username: emp.username ?? "",
+            password: emp.password ?? "",
+            access_level: emp.access_level ?? "employee",
+          }}
+          onSave={(data) => {
+            setEmployees((prev) =>
+              prev.map((e) => (e.id === emp.id ? { ...emp, ...data } : e)),
+            );
+            addToast("Funcionário atualizado!", "success");
             closeModal();
-          } finally {
-            setIsSaving(false);
-          }
-        }}
-        onCancel={closeModal}
-        isSaving={isSaving}
-      />,
-    );
-  }, [openModal, closeModal, editEmployeeRecord, isSaving]);
+          }}
+          onCancel={closeModal}
+          isSaving={false}
+        />,
+      );
+    },
+    [openModal, closeModal, setEmployees, addToast],
+  );
 
-  const handleDeleteEmployee = useCallback((emp) => {
-    openModal(
-      "Excluir Funcionário",
-      <div>
-        <p style={{ color: "var(--text)", marginBottom: 16 }}>
-          Tem certeza que deseja excluir o funcionário <strong>{emp.name}</strong>?
-        </p>
-        <div className="modal-actions">
-          <button className="btn btn-outline" onClick={closeModal}>Cancelar</button>
-          <button
-            className="btn btn-danger"
-            onClick={async () => {
-              await removeEmployeeRecord(emp.id);
+  const handleEditEmployee = useCallback(
+    (emp) => {
+      openModal(
+        "Editar Funcionário",
+        <EmployeeForm
+          initial={{
+            ...EMPTY_EMPLOYEE,
+            ...emp,
+            salary: emp.salary ?? "",
+            department: emp.department ?? "",
+            admission: emp.admission ?? today(),
+            username: emp.username ?? "",
+            password: emp.password ?? "",
+            access_level: emp.access_level ?? "employee",
+          }}
+          onSave={async (data) => {
+            setIsSaving(true);
+            try {
+              await editEmployeeRecord(emp.id, data);
               closeModal();
-            }}
-          >
-            Excluir
-          </button>
-        </div>
-      </div>,
-    );
-  }, [openModal, closeModal, removeEmployeeRecord]);
+            } finally {
+              setIsSaving(false);
+            }
+          }}
+          onCancel={closeModal}
+          isSaving={isSaving}
+        />,
+      );
+    },
+    [openModal, closeModal, editEmployeeRecord, isSaving],
+  );
+
+  const handleDeleteEmployee = useCallback(
+    (emp) => {
+      openModal(
+        "Excluir Funcionário",
+        <div>
+          <p style={{ color: "var(--text)", marginBottom: 16 }}>
+            Tem certeza que deseja excluir o funcionário{" "}
+            <strong>{emp.name}</strong>?
+          </p>
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={closeModal}>
+              Cancelar
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={async () => {
+                await removeEmployeeRecord(emp.id);
+                closeModal();
+              }}
+            >
+              Excluir
+            </button>
+          </div>
+        </div>,
+      );
+    },
+    [openModal, closeModal, removeEmployeeRecord],
+  );
 
   const filtered = employees.filter((emp) => {
     const matchSearch =
@@ -317,8 +448,12 @@ function Funcionarios() {
   });
 
   const totalActive = employees.filter((e) => e.status === "active").length;
-  const totalPayroll = employees.reduce((sum, e) => sum + Number(e.salary || 0), 0);
-  const averageSalary = employees.length > 0 ? totalPayroll / employees.length : 0;
+  const totalPayroll = employees.reduce(
+    (sum, e) => sum + Number(e.salary || 0),
+    0,
+  );
+  const averageSalary =
+    employees.length > 0 ? totalPayroll / employees.length : 0;
 
   const statusLabel = (s) => STATUS_OPTS.find((o) => o.value === s)?.label || s;
   const statusCls = (s) => STATUS_OPTS.find((o) => o.value === s)?.cls || "";
@@ -343,7 +478,14 @@ function Funcionarios() {
       <div className="kpi-grid kpi-grid-3">
         <div className="kpi-card kpi-clients">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
               <circle cx="9" cy="7" r="4" />
             </svg>
@@ -355,7 +497,14 @@ function Funcionarios() {
         </div>
         <div className="kpi-card kpi-expense">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <line x1="12" y1="1" x2="12" y2="23" />
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
@@ -367,7 +516,14 @@ function Funcionarios() {
         </div>
         <div className="kpi-card kpi-profit">
           <div className="kpi-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M18 20V10" />
               <path d="M12 20V4" />
               <path d="M6 20v-6" />
@@ -396,7 +552,9 @@ function Funcionarios() {
           >
             <option value="">Todos</option>
             {STATUS_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
@@ -423,11 +581,21 @@ function Funcionarios() {
                     <td>{emp.role || "—"}</td>
                     <td>{emp.department || "—"}</td>
                     <td>{emp.phone || "—"}</td>
-                    <td>{emp.salary != null && emp.salary !== "" ? fmt(emp.salary) : "—"}</td>
+                    <td>
+                      {emp.salary != null && emp.salary !== ""
+                        ? fmt(emp.salary)
+                        : "—"}
+                    </td>
                     <td>{fmtDate(emp.admission)}</td>
                     <td>
-                      <span className={`status ${emp.access_level === "admin" ? "status-active" : emp.access_level === "supervisor" ? "status-pending" : ""}`}>
-                        {emp.access_level === "admin" ? "Admin" : emp.access_level === "supervisor" ? "Supervisor" : "Funcionário"}
+                      <span
+                        className={`status ${emp.access_level === "admin" ? "status-active" : emp.access_level === "supervisor" ? "status-pending" : ""}`}
+                      >
+                        {emp.access_level === "admin"
+                          ? "Admin"
+                          : emp.access_level === "supervisor"
+                            ? "Supervisor"
+                            : "Funcionário"}
                       </span>
                     </td>
                     <td>
@@ -439,8 +607,11 @@ function Funcionarios() {
                       <div style={{ display: "flex", gap: 6 }}>
                         <button
                           className="btn-action"
-                          onClick={() => handleEditEmployee(emp)}
-                          disabled={isOffline}
+                          onClick={() =>
+                            isOffline
+                              ? handleEditEmployeeDemo(emp)
+                              : handleEditEmployee(emp)
+                          }
                           title="Editar"
                         >
                           ✏️
@@ -460,7 +631,14 @@ function Funcionarios() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="9" style={{ textAlign: "center", padding: "20px", color: "var(--text-dim)" }}>
+                  <td
+                    colSpan="9"
+                    style={{
+                      textAlign: "center",
+                      padding: "20px",
+                      color: "var(--text-dim)",
+                    }}
+                  >
                     Nenhum funcionário cadastrado.
                   </td>
                 </tr>

@@ -3,77 +3,94 @@ import React, { useContext, useMemo } from "react";
 import { AppContext, ThemeContext } from "../App";
 import { useNavigate } from "react-router-dom";
 import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
+import * as XLSX from "xlsx";
 
-// ── Build Installments (same logic as Cobrancas) ────────────────────
-function buildInstallments(loans, today) {
-  const items = [];
-  loans.forEach((loan) => {
-    if (!loan.start_date) return;
-    const v = Number(loan.value) || 0;
-    const rate = (Number(loan.interest_rate) || 0) / 100;
-    const n = Number(loan.installments) || 0;
-    const paid = Number(loan.paid) || 0;
-    if (!v || !n) return;
-
-    const pmt = calcPMT(v, rate, n);
-    const start = new Date(loan.start_date + "T00:00:00");
-
-    for (let i = 1; i <= n; i++) {
-      const due = new Date(start);
-      due.setMonth(due.getMonth() + (i - 1));
-      const dueDate = due.toISOString().split("T")[0];
-
-      let status;
-      if (i <= paid) {
-        status = "paid";
-      } else if (due < today) {
-        status = "overdue";
-      } else {
-        status = "due";
-      }
-
-      items.push({
-        id: `${loan.id}-${i}`,
-        loanId: loan.id,
-        client: getClientName(loan.client),
-        installmentNo: i,
-        totalInstallments: n,
-        dueDate,
-        due,
-        amount: pmt,
-        status,
-      });
-    }
-  });
-  return items.sort((a, b) => a.due - b.due);
-}
+import { calculateGlobalKPIs } from "../utils/finance";
 
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
-  PointElement,
-  LineElement,
   BarElement,
   Title,
   Tooltip,
   Legend,
 } from "chart.js";
-import { Line, Bar } from "react-chartjs-2";
+import { Bar } from "react-chartjs-2";
 
 ChartJS.register(
   CategoryScale,
   LinearScale,
-  PointElement,
-  LineElement,
   BarElement,
   Title,
   Tooltip,
   Legend,
 );
 
+// ── Helper: Build monthly cash flow ────────────────────────────────────────
+const buildMonthlyCashFlow = (loans, transactions, today) => {
+  const months = {};
+
+  // Initialize last 3 months
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(today);
+    d.setMonth(d.getMonth() - i);
+    const monthKey = d.toISOString().split("T")[0].slice(0, 7);
+    months[monthKey] = {
+      income: 0,
+      expense: 0,
+      label: d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
+    };
+  }
+
+  // Add transactions
+  if (Array.isArray(transactions)) {
+    transactions.forEach((t) => {
+      const date = new Date(t.date);
+      const monthKey = date.toISOString().split("T")[0].slice(0, 7);
+      if (months[monthKey]) {
+        const amount = Number(t.amount) || 0;
+        if (t.type === "income") {
+          months[monthKey].income += amount;
+        } else {
+          months[monthKey].expense += amount;
+        }
+      }
+    });
+  }
+
+  // Add loans as expenses (disbursements)
+  if (Array.isArray(loans)) {
+    loans
+      .filter(
+        (l) =>
+          l.status === "active" ||
+          l.status === "overdue" ||
+          l.status === "paid",
+      )
+      .forEach((l) => {
+        const date = new Date(l.start_date + "T00:00:00");
+        const monthKey = date.toISOString().split("T")[0].slice(0, 7);
+        if (months[monthKey]) {
+          months[monthKey].expense += Number(l.value) || 0;
+        }
+      });
+  }
+
+  // Return sorted by month ascending
+  return Object.keys(months)
+    .sort()
+    .map((key) => ({
+      month: months[key].label,
+      monthKey: key,
+      income: months[key].income,
+      expense: months[key].expense,
+      saldo: months[key].income - months[key].expense,
+    }));
+};
+
 function Dashboard() {
-  const { clients, transactions, loans, currentUser, userRole } =
+  const { clients, transactions, loans, currentUser, userRole, caixa } =
     useContext(AppContext);
   const { theme } = useContext(ThemeContext);
   const navigate = useNavigate();
@@ -111,63 +128,24 @@ function Dashboard() {
     return loans;
   }, [loans, clients, currentUser, userRole]);
 
-  // ── Generate all installments (same logic as Cobranças) ──────────────────
-  const allInstallments = useMemo(
-    () => buildInstallments(accessibleLoans, today),
-    [accessibleLoans, today],
-  );
-
-  // ── KPIs calculated from real data ───────────────────────────────────────
+  // ── KPIs calculated uniformly ──────────────────────────────────────────────
   const kpis = useMemo(() => {
-    // Using same logic as Cobranças
-    const paid = allInstallments.filter((i) => i.status === "paid");
-    const totalRecebido = paid.reduce((s, i) => s + i.amount, 0);
-
-    // Total Emprestado = TODOS os empréstimos (ativos + inativos + pagos)
-    const totalEmprestado = accessibleLoans.reduce(
-      (s, l) => s + (Number(l.value) || 0),
-      0,
+    const metrics = calculateGlobalKPIs(
+      accessibleLoans,
+      transactions,
+      Number(caixa) || 0,
+      today,
     );
-
-    const activeLoans = accessibleLoans.filter(
-      (l) => l.status === "active" || l.status === "overdue",
-    );
-
-    const totalAReceber = accessibleLoans.reduce((s, l) => {
-      if (l.status === "paid" || l.status === "cancelled") return s;
-      const pmt = calcPMT(
-        Number(l.value) || 0,
-        (Number(l.interest_rate) || 0) / 100,
-        Number(l.installments) || 1,
-      );
-      const remaining = (Number(l.installments) || 0) - (Number(l.paid) || 0);
-      return s + pmt * Math.max(remaining, 0);
-    }, 0);
-
-    // ✅ Total Em Atraso = Soma apenas das parcelas vencidas e não pagas
-    const overdue = allInstallments.filter((i) => i.status === "overdue");
-    const totalEmAtraso = overdue.reduce((s, i) => s + i.amount, 0);
 
     const activeClients = accessibleClients.filter(
       (c) => c.status === "active" || c.status === "overdue",
     ).length;
 
-    console.log(
-      "[Dashboard] Total Recebido (from paid installments):",
-      totalRecebido,
-    );
-
     return {
-      totalEmprestado,
-      totalRecebido,
-      totalAReceber,
-      totalEmAtraso,
+      ...metrics,
       activeClients,
-      activeLoansCount: activeLoans.length,
-      overdueCount: overdue.length,
-      paidInstallmentsCount: paid.length,
     };
-  }, [accessibleLoans, accessibleClients, allInstallments]);
+  }, [accessibleLoans, accessibleClients, transactions, caixa, today]);
 
   // ── Top debtors ───────────────────────────────────────────────────────────
   const topDebtors = useMemo(() => {
@@ -211,91 +189,172 @@ function Dashboard() {
     return items.sort((a, b) => a.due - b.due).slice(0, 8);
   }, [accessibleLoans]);
 
-  // ── Chart: Monthly evolution of loans and receipts ────────────────────────
-  const chartData = useMemo(() => {
-    const months = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      months.push({
-        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-        label: d.toLocaleDateString("pt-BR", { month: "short" }),
-      });
-    }
-    const loansByMonth = months.map(({ key }) =>
-      accessibleLoans
-        .filter((l) => l.start_date && l.start_date.startsWith(key))
-        .reduce((s, l) => s + (Number(l.value) || 0), 0),
-    );
-    const receivedByMonth = months.map(({ key }) =>
-      allInstallments
-        .filter(
-          (i) => i.status === "paid" && i.dueDate && i.dueDate.startsWith(key),
-        )
-        .reduce((s, i) => s + i.amount, 0),
-    );
+  // ── Monthly Cash Flow (Last 3 months) ──────────────────────────────────────
+  const monthlyCashFlow = useMemo(() => {
+    return buildMonthlyCashFlow(accessibleLoans, transactions, today);
+  }, [accessibleLoans, transactions, today]);
+
+  // ── Chart Data for Cash Flow ──────────────────────────────────────────────
+  const cashFlowChartData = useMemo(() => {
     return {
-      labels: months.map((m) => m.label),
+      labels: monthlyCashFlow.map((m) => m.month),
       datasets: [
         {
-          label: "Emprestado",
-          data: loansByMonth,
-          borderColor: getCss("--gold"),
-          backgroundColor: "rgba(255, 165, 0, 0.1)",
-          pointBackgroundColor: getCss("--gold"),
-          pointBorderColor: getCss("--bg-primary"),
-          pointBorderWidth: 2,
-          pointRadius: 5,
-          tension: 0.4,
-          fill: true,
+          label: "Entradas",
+          data: monthlyCashFlow.map((m) => m.income),
+          backgroundColor: "rgba(56, 142, 60, 0.8)",
+          borderColor: "rgb(56, 142, 60)",
+          borderWidth: 2,
+          borderRadius: 4,
+          type: "bar",
+          yAxisID: "y",
         },
         {
-          label: "Recebido",
-          data: receivedByMonth,
-          borderColor: getCss("--green"),
-          backgroundColor: "rgba(34, 197, 94, 0.1)",
-          pointBackgroundColor: getCss("--green"),
-          pointBorderColor: getCss("--bg-primary"),
-          pointBorderWidth: 2,
-          pointRadius: 5,
-          tension: 0.4,
+          label: "Saídas",
+          data: monthlyCashFlow.map((m) => m.expense),
+          backgroundColor: "rgba(211, 47, 47, 0.8)",
+          borderColor: "rgb(211, 47, 47)",
+          borderWidth: 2,
+          borderRadius: 4,
+          type: "bar",
+          yAxisID: "y",
+        },
+        {
+          label: "Saldo",
+          data: monthlyCashFlow.map((m) => m.saldo),
+          borderColor: "rgba(33, 150, 243, 1)",
+          backgroundColor: "rgba(33, 150, 243, 0.1)",
+          borderWidth: 3,
           fill: true,
+          tension: 0.4,
+          type: "line",
+          yAxisID: "y1",
+          pointRadius: 6,
+          pointBackgroundColor: monthlyCashFlow.map((m) =>
+            m.saldo >= 0 ? "rgb(56, 142, 60)" : "rgb(211, 47, 47)",
+          ),
+          pointBorderWidth: 2,
+          pointBorderColor: "white",
         },
       ],
     };
-  }, [accessibleLoans, allInstallments, theme]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [monthlyCashFlow]);
 
-  const chartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "top", labels: { color: getCss("--text") } },
-        tooltip: {
-          backgroundColor: getCss("--bg-secondary"),
-          titleColor: getCss("--text"),
-          bodyColor: getCss("--text-dim"),
-          borderColor: getCss("--border"),
-          borderWidth: 1,
-          callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          ticks: { color: getCss("--text-dim") },
-          grid: { color: `${getCss("--border")}40` },
-        },
-        y: {
-          beginAtZero: true,
-          ticks: { color: getCss("--text-dim"), callback: (v) => fmt(v) },
-          grid: { color: `${getCss("--border")}40` },
-        },
-      },
-    }),
-    [theme],
-  ); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Overdue Installments by Category ──────────────────────────────────────
+  const overdueByCategory = useMemo(() => {
+    const categories = {
+      light: {
+        label: "1-7 dias",
+        days: [1, 7],
+        items: [],
+        amount: 0,
+        color: "#ff9800",
+      }, // Amarelo
+      moderate: {
+        label: "8-14 dias",
+        days: [8, 14],
+        items: [],
+        amount: 0,
+        color: "#ff6f00",
+      }, // Laranja
+      severe: {
+        label: "15-30 dias",
+        days: [15, 30],
+        items: [],
+        amount: 0,
+        color: "#e65100",
+      }, // Laranja escuro
+      critical: {
+        label: "30+ dias",
+        days: [31, 999999],
+        items: [],
+        amount: 0,
+        color: "#d32f2f",
+      }, // Vermelho
+    };
+
+    // Get all overdue installments from KPIs
+    const allInstallments = kpis.allInstallments || [];
+    const overdueInstallments = allInstallments.filter(
+      (i) => i.status === "overdue",
+    );
+
+    // Categorize each overdue installment by days overdue
+    overdueInstallments.forEach((inst) => {
+      const daysOverdue = Math.ceil(
+        (today - new Date(inst.dueDate)) / (1000 * 60 * 60 * 24),
+      );
+
+      let category = null;
+      if (daysOverdue >= 1 && daysOverdue <= 7) {
+        category = "light";
+      } else if (daysOverdue >= 8 && daysOverdue <= 14) {
+        category = "moderate";
+      } else if (daysOverdue >= 15 && daysOverdue <= 30) {
+        category = "severe";
+      } else if (daysOverdue > 30) {
+        category = "critical";
+      }
+
+      if (category) {
+        categories[category].items.push({
+          client: inst.client,
+          amount: inst.amount,
+          daysOverdue,
+          dueDate: inst.dueDate,
+        });
+        categories[category].amount += inst.amount;
+      }
+    });
+
+    return categories;
+  }, [kpis, today]);
+
+  const handleExportFinanceiro = () => {
+    const dataToExport = accessibleLoans.map((l) => ({
+      Cliente: getClientName(l.client),
+      "Valor (R$)": Number(l.value),
+      Status:
+        l.status === "active"
+          ? "Ativo"
+          : l.status === "overdue"
+            ? "Atrasado"
+            : l.status === "paid"
+              ? "Pago"
+              : "Pendente/Cancelado",
+      Taxa: Number(l.interest_rate) + "%",
+      Parcelas: `${l.installments}x`,
+      Pagas: l.paid,
+      "Data Emissão": l.start_date ? fmtDate(l.start_date) : "-",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Emprestimos");
+
+    const installmentsData = allInstallments.map((i) => ({
+      Cliente: i.client,
+      Parcela: `${i.installmentNo}/${i.totalInstallments}`,
+      "Valor (R$)": i.amount,
+      Vencimento: fmtDate(i.dueDate),
+      Status:
+        i.status === "paid"
+          ? "Pago"
+          : i.status === "overdue"
+            ? "Atrasado"
+            : "Pendente",
+    }));
+
+    if (installmentsData.length > 0) {
+      const worksheet2 = XLSX.utils.json_to_sheet(installmentsData);
+      XLSX.utils.book_append_sheet(workbook, worksheet2, "Parcelas");
+    }
+
+    XLSX.writeFile(
+      workbook,
+      `Relatorio_Financeiro_${new Date().toISOString().split("T")[0]}.xlsx`,
+    );
+  };
 
   return (
     <div className="page active">
@@ -307,6 +366,17 @@ function Dashboard() {
         <div className="header-actions">
           <button
             className="btn btn-outline btn-sm"
+            style={{
+              marginRight: 8,
+              borderColor: "var(--green)",
+              color: "var(--green)",
+            }}
+            onClick={handleExportFinanceiro}
+          >
+            Baixar Relatório
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
             onClick={() => navigate("/emprestimos")}
           >
             + Novo Empréstimo
@@ -314,13 +384,116 @@ function Dashboard() {
         </div>
       </div>
 
+      {/* CASH FLOW CHART - 3 Months */}
+      {/* Moved to end - after KPI cards */}
+
       {/* KPI Cards */}
       <div className="kpi-grid">
+        {/* SALDO CAIXA - Apenas Admin */}
+        {(userRole === "admin" || currentUser?.access_level === "admin") && (
+          <div
+            className="kpi-card animate-in"
+            style={{
+              "--delay": 1,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+              border: "1px solid #e5e7eb",
+            }}
+          >
+            <div
+              className="kpi-icon"
+              style={{ background: "var(--blue)", color: "white" }}
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <circle cx="12" cy="12" r="5" />
+                <circle cx="12" cy="12" r="1" fill="currentColor" />
+              </svg>
+            </div>
+            <div className="kpi-info">
+              <span
+                className="kpi-label"
+                style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+              >
+                Caixa Disponível
+              </span>
+              <span
+                className="kpi-value"
+                style={{ color: "#111", fontSize: "1.6rem" }}
+              >
+                {fmt(kpis.caixaDisponivel)}
+              </span>
+              <span
+                className="kpi-change positive"
+                style={{ fontSize: "0.8rem", color: "#888" }}
+              >
+                Saldo operacional
+              </span>
+            </div>
+          </div>
+        )}
+
         <div
-          className="kpi-card kpi-revenue animate-in"
-          style={{ "--delay": 1 }}
+          className="kpi-card animate-in"
+          style={{
+            "--delay": 2,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            border: "1px solid #e5e7eb",
+          }}
         >
-          <div className="kpi-icon">
+          <div className="kpi-icon" style={{ background: "var(--orange)" }}>
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+          </div>
+          <div className="kpi-info">
+            <span
+              className="kpi-label"
+              style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+            >
+              Contratos Ativos
+            </span>
+            <span
+              className="kpi-value"
+              style={{ color: "#111", fontSize: "1.6rem" }}
+            >
+              {kpis.activeLoansCount}
+            </span>
+            <span
+              className="kpi-change positive"
+              style={{ fontSize: "0.8rem", color: "#888" }}
+            >
+              Em andamento
+            </span>
+          </div>
+        </div>
+
+        <div
+          className="kpi-card animate-in"
+          style={{
+            "--delay": 3,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            border: "1px solid #e5e7eb",
+          }}
+        >
+          <div className="kpi-icon" style={{ background: "var(--green)" }}>
             <svg
               width="22"
               height="22"
@@ -334,21 +507,36 @@ function Dashboard() {
             </svg>
           </div>
           <div className="kpi-info">
-            <span className="kpi-label">Total Emprestado</span>
-            <span className="kpi-value">{fmt(kpis.totalEmprestado)}</span>
-            <span className="kpi-change positive">
-              {kpis.activeLoansCount} empréstimo
-              {kpis.activeLoansCount !== 1 ? "s" : ""} ativo
-              {kpis.activeLoansCount !== 1 ? "s" : ""}
+            <span
+              className="kpi-label"
+              style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+            >
+              Total Emprestado
+            </span>
+            <span
+              className="kpi-value"
+              style={{ color: "#111", fontSize: "1.6rem" }}
+            >
+              {fmt(kpis.totalEmprestado)}
+            </span>
+            <span
+              className="kpi-change positive"
+              style={{ fontSize: "0.8rem", color: "#888" }}
+            >
+              Capital liberado
             </span>
           </div>
         </div>
 
         <div
-          className="kpi-card kpi-profit animate-in"
-          style={{ "--delay": 2 }}
+          className="kpi-card animate-in"
+          style={{
+            "--delay": 4,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            border: "1px solid #e5e7eb",
+          }}
         >
-          <div className="kpi-icon">
+          <div className="kpi-icon" style={{ background: "var(--purple)" }}>
             <svg
               width="22"
               height="22"
@@ -361,17 +549,36 @@ function Dashboard() {
             </svg>
           </div>
           <div className="kpi-info">
-            <span className="kpi-label">Total a Receber</span>
-            <span className="kpi-value">{fmt(kpis.totalAReceber)}</span>
-            <span className="kpi-change neutral">Saldo em aberto</span>
+            <span
+              className="kpi-label"
+              style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+            >
+              Total a Receber
+            </span>
+            <span
+              className="kpi-value"
+              style={{ color: "#111", fontSize: "1.6rem" }}
+            >
+              {fmt(kpis.totalAReceber)}
+            </span>
+            <span
+              className="kpi-change neutral"
+              style={{ fontSize: "0.8rem", color: "#888" }}
+            >
+              Saldo em aberto
+            </span>
           </div>
         </div>
 
         <div
-          className="kpi-card kpi-clients animate-in"
-          style={{ "--delay": 3 }}
+          className="kpi-card animate-in"
+          style={{
+            "--delay": 5,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            border: "1px solid #e5e7eb",
+          }}
         >
-          <div className="kpi-icon">
+          <div className="kpi-icon" style={{ background: "#888" }}>
             <svg
               width="22"
               height="22"
@@ -385,21 +592,36 @@ function Dashboard() {
             </svg>
           </div>
           <div className="kpi-info">
-            <span className="kpi-label">Total Recebido</span>
-            <span className="kpi-value">{fmt(kpis.totalRecebido)}</span>
-            <span className="kpi-change positive">
-              {kpis.paidInstallmentsCount} parcela
-              {kpis.paidInstallmentsCount !== 1 ? "s" : ""} quitada
-              {kpis.paidInstallmentsCount !== 1 ? "s" : ""}
+            <span
+              className="kpi-label"
+              style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+            >
+              Total Recebido
+            </span>
+            <span
+              className="kpi-value"
+              style={{ color: "#111", fontSize: "1.6rem" }}
+            >
+              {fmt(kpis.totalRecebido)}
+            </span>
+            <span
+              className="kpi-change positive"
+              style={{ fontSize: "0.8rem", color: "#888" }}
+            >
+              Parcelas quitadas
             </span>
           </div>
         </div>
 
         <div
-          className="kpi-card kpi-expense animate-in"
-          style={{ "--delay": 4 }}
+          className="kpi-card animate-in"
+          style={{
+            "--delay": 6,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            border: "1px solid #e5e7eb",
+          }}
         >
-          <div className="kpi-icon">
+          <div className="kpi-icon" style={{ background: "var(--red)" }}>
             <svg
               width="22"
               height="22"
@@ -414,35 +636,168 @@ function Dashboard() {
             </svg>
           </div>
           <div className="kpi-info">
-            <span className="kpi-label">Em Atraso</span>
-            <span className="kpi-value">{fmt(kpis.totalEmAtraso)}</span>
-            <span className="kpi-change negative">
-              {kpis.overdueCount} empréstimo{kpis.overdueCount !== 1 ? "s" : ""}{" "}
-              inadimplente{kpis.overdueCount !== 1 ? "s" : ""}
+            <span
+              className="kpi-label"
+              style={{ fontSize: "0.75rem", fontWeight: 600, color: "#888" }}
+            >
+              Em Atraso
+            </span>
+            <span
+              className="kpi-value"
+              style={{ color: "#111", fontSize: "1.6rem" }}
+            >
+              {fmt(kpis.totalEmAtraso)}
+            </span>
+            <span
+              className="kpi-change negative"
+              style={{ fontSize: "0.8rem", color: "#888" }}
+            >
+              {kpis.overdueCount} empréstimo{kpis.overdueCount !== 1 ? "s" : ""}
             </span>
           </div>
         </div>
       </div>
 
+      {/* CASH FLOW CHART - 3 Months */}
+      <div
+        style={{
+          marginBottom: 24,
+          padding: "24px",
+          background: "white",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+        }}
+        className="animate-in"
+      >
+        <div style={{ marginBottom: 20 }}>
+          <h3 style={{ marginBottom: 4 }}>📊 Fluxo de Caixa (3 Meses)</h3>
+          <p style={{ fontSize: "0.9rem", color: "#666" }}>
+            Tendência de entradas, saídas e saldo nos últimos 3 meses
+          </p>
+        </div>
+
+        <div style={{ position: "relative", height: 320 }}>
+          <Bar
+            data={cashFlowChartData}
+            options={{
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: {
+                mode: "index",
+                intersect: false,
+              },
+              plugins: {
+                legend: {
+                  display: true,
+                  position: "top",
+                  labels: {
+                    font: { size: 12, weight: 500 },
+                    padding: 16,
+                    usePointStyle: true,
+                    pointStyle: "circle",
+                  },
+                },
+                tooltip: {
+                  backgroundColor: "rgba(0, 0, 0, 0.8)",
+                  padding: 12,
+                  titleFont: { size: 13, weight: "bold" },
+                  bodyFont: { size: 12 },
+                  callbacks: {
+                    label: function (context) {
+                      return `${context.dataset.label}: ${fmt(context.parsed.y)}`;
+                    },
+                  },
+                },
+              },
+              scales: {
+                y: {
+                  type: "linear",
+                  display: true,
+                  position: "left",
+                  title: {
+                    display: true,
+                    text: "Valor (R$)",
+                    font: { size: 11, weight: 500 },
+                  },
+                  ticks: {
+                    callback: function (value) {
+                      return "R$ " + (value / 1000).toFixed(0) + "K";
+                    },
+                  },
+                },
+                y1: {
+                  type: "linear",
+                  display: true,
+                  position: "right",
+                  title: {
+                    display: true,
+                    text: "Saldo (R$)",
+                    font: { size: 11, weight: 500 },
+                  },
+                  grid: {
+                    drawOnChartArea: false,
+                  },
+                  ticks: {
+                    callback: function (value) {
+                      return "R$ " + (value / 1000).toFixed(0) + "K";
+                    },
+                  },
+                },
+              },
+            }}
+          />
+        </div>
+      </div>
+
       <div className="dashboard-grid">
-        {/* Chart */}
-        <div className="card chart-card animate-in" style={{ "--delay": 5 }}>
+        {/* Maiores Devedores */}
+        <div className="card animate-in" style={{ "--delay": 7 }}>
           <div className="card-header">
-            <h3>Evolução Mensal</h3>
-            <button
-              className="btn-link"
-              onClick={() => navigate("/relatorios")}
-            >
-              Ver Relatórios
+            <h3>Maiores Devedores</h3>
+            <button className="btn-link" onClick={() => navigate("/cobrancas")}>
+              Ver Cobranças
             </button>
           </div>
-          <div className="chart-container">
-            <Line data={chartData} options={chartOptions} />
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Cliente</th>
+                  <th>A Receber</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topDebtors.length > 0 ? (
+                  topDebtors.map(([name, value], i) => (
+                    <tr key={name}>
+                      <td>{i + 1}</td>
+                      <td>{name}</td>
+                      <td style={{ fontWeight: "bold" }}>{fmt(value)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td
+                      colSpan="3"
+                      style={{
+                        textAlign: "center",
+                        padding: "20px",
+                        color: "var(--text-dim)",
+                      }}
+                    >
+                      Nenhum devedor ativo
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Upcoming dues */}
-        <div className="card animate-in" style={{ "--delay": 6 }}>
+        {/* Próximos Vencimentos */}
+        <div className="card animate-in" style={{ "--delay": 8 }}>
           <div className="card-header">
             <h3>Próximos Vencimentos</h3>
             <button
@@ -460,12 +815,21 @@ function Dashboard() {
                   className="transaction-row"
                 >
                   <div
-                    className={`tx-icon ${diff < 0 ? "tx-expense" : diff <= 3 ? "tx-expense" : "tx-income"}`}
+                    className={`tx-icon ${diff < 0 ? "tx-expense" : diff <= 3 ? "tx-warning" : "tx-income"}`}
                   >
-                    {diff < 0 ? "⚠" : diff <= 3 ? "!" : "📅"}
+                    <svg
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
                   </div>
                   <div className="tx-info">
-                    <div className="tx-desc">{loan.client}</div>
+                    <div className="tx-desc">{getClientName(loan.client)}</div>
                     <div className="tx-category">
                       Parcela {installmentNo}/{loan.installments}
                     </div>
@@ -487,7 +851,7 @@ function Dashboard() {
                         ? `${Math.abs(diff)}d atrasado`
                         : diff === 0
                           ? "Hoje"
-                          : `em ${diff}d — ${fmtDate(due.toISOString().split("T")[0])}`}
+                          : `em ${diff}d`}
                     </div>
                   </div>
                 </div>
@@ -500,104 +864,9 @@ function Dashboard() {
                   color: "var(--text-dim)",
                 }}
               >
-                Nenhum vencimento próximo.
+                Nenhum vencimento próximo
               </p>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* Summary row */}
-      <div className="dashboard-grid" style={{ marginTop: 0 }}>
-        {/* Top debtors */}
-        <div className="card animate-in" style={{ "--delay": 7 }}>
-          <div className="card-header">
-            <h3>Maiores Devedores</h3>
-            <button className="btn-link" onClick={() => navigate("/clientes")}>
-              Ver Clientes
-            </button>
-          </div>
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Cliente</th>
-                  <th>A Receber</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topDebtors.length > 0 ? (
-                  topDebtors.map(([name, value], i) => (
-                    <tr key={name}>
-                      <td>{i + 1}</td>
-                      <td>{name}</td>
-                      <td>{fmt(value)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td
-                      colSpan="3"
-                      style={{
-                        textAlign: "center",
-                        padding: "20px",
-                        color: "var(--text-dim)",
-                      }}
-                    >
-                      Nenhum devedor ativo.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Quick stats */}
-        <div className="card animate-in" style={{ "--delay": 8 }}>
-          <div className="card-header">
-            <h3>Resumo Geral</h3>
-          </div>
-          <div style={{ padding: "8px 0" }}>
-            {[
-              {
-                label: "Clientes Ativos",
-                value: kpis.activeClients,
-                icon: "👥",
-              },
-              {
-                label: "Empréstimos Ativos",
-                value: kpis.activeLoansCount,
-                icon: "💳",
-              },
-              { label: "Em Atraso", value: kpis.overdueCount, icon: "⚠️" },
-              {
-                label: "Total de Empréstimos",
-                value: accessibleLoans.length,
-                icon: "📋",
-              },
-              {
-                label: "Total de Clientes",
-                value: accessibleClients.length,
-                icon: "🧑‍💼",
-              },
-            ].map((item) => (
-              <div key={item.label} className="transaction-row">
-                <div
-                  className="tx-icon"
-                  style={{ background: "var(--bg-primary)" }}
-                >
-                  {item.icon}
-                </div>
-                <div className="tx-info">
-                  <div className="tx-desc">{item.label}</div>
-                </div>
-                <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>
-                  {item.value}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       </div>

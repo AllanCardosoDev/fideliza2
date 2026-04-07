@@ -153,18 +153,28 @@ export const fetchCNPJData = async (cnpjDigits) => {
     if (digits.length !== 14) return null;
 
     const response = await fetch(
-      `https://www.receitaws.com.br/v1/cnpj/${digits}`
+      `https://brasilapi.com.br/api/cnpj/v1/${digits}`
     );
     if (!response.ok) return null;
 
     const data = await response.json();
-    if (data.status === "ERROR") return null;
+
+    let phone = data.ddd_telefone_1 || data.ddd_telefone_2 || "";
+    phone = phone.replace(/\D/g, "");
+
+    // Optionally combine street prefix if logradouro doesn't have it
+    const streetPrefix = data.descricao_tipo_de_logradouro ? data.descricao_tipo_de_logradouro + " " : "";
+    let street = data.logradouro || "";
+    // Avoid "RUA RUA X"
+    if (streetPrefix && street && !street.toUpperCase().startsWith(streetPrefix.trim().toUpperCase())) {
+      street = streetPrefix + street;
+    }
 
     return {
-      name: data.nome || "",
+      name: data.razao_social || data.nome_fantasia || "",
       cnpj: maskCNPJ(data.cnpj || digits),
       address_parts: {
-        street: data.logradouro || "",
+        street: street,
         number: data.numero || "",
         complement: data.complemento || "",
         neighborhood: data.bairro || "",
@@ -172,7 +182,7 @@ export const fetchCNPJData = async (cnpjDigits) => {
         state: data.uf || "",
         cep: data.cep ? data.cep.replace(/\D/g, "") : "",
       },
-      phone: data.telefone ? data.telefone.replace(/\D/g, "") : "",
+      phone: phone,
     };
   } catch (err) {
     console.error("Erro ao buscar CNPJ:", err);

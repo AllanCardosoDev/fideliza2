@@ -1,8 +1,9 @@
 // src/pages/Relatorios.jsx
-import React, { useContext, useMemo } from "react";
+import React, { useState, useContext, useMemo } from "react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { AppContext, ThemeContext } from "../App";
 import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
-import { generateLoanPDF } from "../utils/protocolHelpers";
 import {
   Chart as ChartJS,
   ArcElement,
@@ -28,8 +29,12 @@ ChartJS.register(
 );
 
 function Relatorios() {
-  const { loans, clients, transactions, currentUser, userRole } = useContext(AppContext);
+  const { loans, clients, transactions, currentUser, userRole } =
+    useContext(AppContext);
   const { theme } = useContext(ThemeContext);
+
+  // State para busca de protocolo
+  const [selectedProtocol, setSelectedProtocol] = useState("");
 
   const getCss = (v) =>
     getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -37,7 +42,9 @@ function Relatorios() {
   // Access Control: Employees see only their own clients and loans
   const accessibleClients = useMemo(() => {
     if (userRole === "employee" && currentUser?.id) {
-      return clients.filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id);
+      return clients.filter(
+        (c) => c.created_by === currentUser.id || c.owner_id === currentUser.id,
+      );
     }
     return clients;
   }, [clients, currentUser, userRole]);
@@ -45,12 +52,47 @@ function Relatorios() {
   const accessibleLoans = useMemo(() => {
     if (userRole === "employee" && currentUser?.id && clients) {
       const myClientIds = clients
-        .filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id)
-        .map(c => c.id);
-      return loans.filter(l => myClientIds.includes(l.client_id));
+        .filter(
+          (c) =>
+            c.created_by === currentUser.id || c.owner_id === currentUser.id,
+        )
+        .map((c) => c.id);
+      return loans.filter((l) => myClientIds.includes(l.client_id));
     }
     return loans;
   }, [loans, clients, currentUser, userRole]);
+
+  // Get all available protocols (AFTER accessibleLoans is defined)
+  const availableProtocols = useMemo(() => {
+    return accessibleLoans
+      .filter((l) => l.protocol)
+      .map((l) => ({ id: l.id, protocol: l.protocol, client: l.client }))
+      .sort((a, b) => (b.protocol || "").localeCompare(a.protocol || ""));
+  }, [accessibleLoans]);
+
+  // Get selected loan detail (AFTER accessibleLoans is defined)
+  const selectedLoanDetail = useMemo(() => {
+    if (!selectedProtocol) return null;
+    const loan = accessibleLoans.find((l) => l.protocol === selectedProtocol);
+    if (!loan) return null;
+
+    const client = clients.find((c) => c.id === loan.client_id);
+    const pmt = calcPMT(
+      Number(loan.value) || 0,
+      (Number(loan.interest_rate) || 0) / 100,
+      Number(loan.installments) || 1,
+    );
+    const totalPayment = pmt * (Number(loan.installments) || 0);
+    const totalInterest = totalPayment - (Number(loan.value) || 0);
+
+    return {
+      ...loan,
+      client,
+      pmt,
+      totalPayment,
+      totalInterest,
+    };
+  }, [selectedProtocol, accessibleLoans, clients]);
 
   // Generate all installments (same logic as Cobranças)
   const allInstallments = useMemo(() => {
@@ -175,8 +217,9 @@ function Relatorios() {
     );
     const count = months.map(
       ({ key }) =>
-        accessibleLoans.filter((l) => l.start_date && l.start_date.startsWith(key))
-          .length,
+        accessibleLoans.filter(
+          (l) => l.start_date && l.start_date.startsWith(key),
+        ).length,
     );
     return { labels: months.map((m) => m.label), loaned, received, count };
   }, [accessibleLoans, allInstallments, theme]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -393,6 +436,142 @@ function Relatorios() {
     URL.revokeObjectURL(url);
   };
 
+  // ── Export Protocol PDF ─────────────────────────────────────────────────────
+  const handleExportProtocolPDF = (loan) => {
+    if (!loan) return;
+
+    const client = clients.find((c) => c.id === loan.client_id);
+    if (!client) {
+      alert("Cliente não encontrado");
+      return;
+    }
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    // Logo no canto superior esquerdo com fundo
+    doc.setFillColor(30, 41, 59);
+    doc.rect(0, 0, pageWidth, 20, "F");
+
+    // Tentar adicionar a logo
+    try {
+      doc.addImage("/logo.jpeg", "JPEG", 5, 3, 14, 14);
+    } catch {
+      // Se a logo não carregar, usar um placeholder com iniciais
+      doc.setTextColor(240, 200, 80);
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      doc.text("FC", 8, 14);
+    }
+
+    // Título ao lado da logo
+    doc.setTextColor(240, 200, 80);
+    doc.setFontSize(14);
+    doc.setFont(undefined, "bold");
+    doc.text("CONTRATO DE EMPRÉSTIMO", 22, 13);
+
+    // Informações principais
+    let yPos = 30;
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    doc.setFont(undefined, "normal");
+
+    doc.text(`Contratante: ${client.name || "—"}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Protocolo: ${loan.protocol || "—"}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Valor do Empréstimo: ${fmt(loan.value)}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Taxa de Juros: ${loan.interest_rate}% a.m.`, 10, yPos);
+    yPos += 6;
+    doc.text(`Número de Parcelas: ${loan.installments}`, 10, yPos);
+    yPos += 6;
+    doc.text(`Data de Contratação: ${fmtDate(loan.start_date)}`, 10, yPos);
+    yPos += 12;
+
+    // Título da tabela
+    doc.setFont(undefined, "bold");
+    doc.text("CRONOGRAMA DE PARCELAS", 10, yPos);
+    yPos += 8;
+    doc.setFont(undefined, "normal");
+
+    // Calcular dados da amortização
+    const v = Number(loan.value) || 0;
+    const r = (Number(loan.interest_rate) || 0) / 100;
+    const n = Number(loan.installments) || 0;
+    const pmt = calcPMT(v, r, n);
+
+    // Gerar tabela de parcelas usando autoTable
+    const tableData = [];
+    let balance = v;
+
+    for (let i = 1; i <= n; i++) {
+      const interest = balance * r;
+      const amort = pmt - interest;
+      balance -= amort;
+
+      const due = new Date(loan.start_date + "T00:00:00");
+      due.setMonth(due.getMonth() + (i - 1));
+      const dueDate = due.toISOString().split("T")[0];
+      const [year, month, day] = dueDate.split("-");
+      const dueDateFormatted = `${day}/${month}/${year}`;
+
+      tableData.push([
+        i,
+        dueDateFormatted,
+        fmt(pmt),
+        fmt(interest),
+        fmt(amort),
+        fmt(Math.max(balance, 0)),
+      ]);
+    }
+
+    autoTable(doc, {
+      head: [
+        [
+          "Parc.",
+          "Vencimento",
+          "Valor Parcela",
+          "Juros",
+          "Amortização",
+          "Saldo Devedor",
+        ],
+      ],
+      body: tableData,
+      startY: yPos,
+      theme: "grid",
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: {
+        fillColor: [30, 41, 59],
+        textColor: [240, 200, 80],
+        fontStyle: "bold",
+      },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      columnStyles: {
+        0: { halign: "center" },
+        1: { halign: "center" },
+        2: { halign: "right" },
+        3: { halign: "right" },
+        4: { halign: "right" },
+        5: { halign: "right" },
+      },
+    });
+
+    // Rodapé
+    doc.setFontSize(8);
+    doc.setTextColor(100, 100, 100);
+    doc.text(
+      `Documento gerado em ${new Date().toLocaleString("pt-BR")}`,
+      10,
+      pageHeight - 10,
+    );
+
+    doc.save(
+      `contrato-${loan.id}-${(client.name || "contratos").replace(/\s+/g, "-")}.pdf`,
+    );
+  };
+
   // Inadimplência list
   const inadimplentes = useMemo(() => {
     return loans
@@ -522,6 +701,309 @@ function Relatorios() {
             👥 Exportar Clientes (CSV)
           </button>
         </div>
+      </div>
+
+      {/* Protocol Search Card */}
+      <div
+        className="card animate-in"
+        style={{ "--delay": 0.5, marginBottom: 24 }}
+      >
+        <div className="card-header">
+          <h3>🔍 Buscar por Protocolo</h3>
+        </div>
+        <div
+          style={{
+            padding: 16,
+            display: "grid",
+            gridTemplateColumns: "1fr auto",
+            gap: 16,
+            alignItems: "end",
+          }}
+        >
+          <div>
+            <label
+              style={{
+                display: "block",
+                marginBottom: 8,
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "var(--text-dim)",
+                textTransform: "uppercase",
+              }}
+            >
+              Selecione um Protocolo
+            </label>
+            <select
+              value={selectedProtocol}
+              onChange={(e) => setSelectedProtocol(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "12px",
+                border: "1px solid var(--border)",
+                background: "var(--bg)",
+                color: "var(--text)",
+                borderRadius: 6,
+                fontSize: "1rem",
+                fontWeight: 600,
+              }}
+            >
+              <option value="">-- Selecione um protocolo --</option>
+              {availableProtocols.map((p) => (
+                <option key={p.id} value={p.protocol}>
+                  {p.protocol} - {p.client}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            className="btn btn-gold btn-sm"
+            onClick={() => {
+              if (selectedLoanDetail) {
+                handleExportProtocolPDF(selectedLoanDetail);
+              }
+            }}
+            disabled={!selectedLoanDetail}
+            style={{
+              opacity: !selectedLoanDetail ? 0.5 : 1,
+              cursor: !selectedLoanDetail ? "not-allowed" : "pointer",
+            }}
+          >
+            📄 Gerar PDF
+          </button>
+        </div>
+
+        {/* Selected Protocol Details */}
+        {selectedLoanDetail && (
+          <div
+            style={{
+              padding: "16px",
+              backgroundColor: "rgba(22, 163, 74, 0.05)",
+              borderTop: "1px solid var(--border)",
+              borderRadius: "0 0 8px 8px",
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: 16,
+              }}
+            >
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Cliente
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {selectedLoanDetail.client?.name ||
+                    selectedLoanDetail.client ||
+                    "—"}
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Valor Empréstimo
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {fmt(selectedLoanDetail.value)}
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Taxa (a.m.)
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {parseFloat(selectedLoanDetail.interest_rate || 0).toFixed(2)}
+                  %
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Parcelas
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {selectedLoanDetail.paid}/{selectedLoanDetail.installments}
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Valor Parcela
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {fmt(selectedLoanDetail.pmt)}
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Status
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  <span
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      backgroundColor:
+                        selectedLoanDetail.status === "active"
+                          ? "rgba(34, 197, 94, 0.1)"
+                          : selectedLoanDetail.status === "paid"
+                            ? "rgba(59, 130, 246, 0.1)"
+                            : selectedLoanDetail.status === "overdue"
+                              ? "rgba(239, 68, 68, 0.1)"
+                              : "rgba(107, 114, 128, 0.1)",
+                      color:
+                        selectedLoanDetail.status === "active"
+                          ? "var(--green)"
+                          : selectedLoanDetail.status === "paid"
+                            ? "var(--blue)"
+                            : selectedLoanDetail.status === "overdue"
+                              ? "var(--red)"
+                              : "var(--text-dim)",
+                    }}
+                  >
+                    {selectedLoanDetail.status}
+                  </span>
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Juros Totais
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--text)",
+                  }}
+                >
+                  {fmt(selectedLoanDetail.totalInterest)}
+                </p>
+              </div>
+              <div>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  Total a Receber
+                </span>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: "1rem",
+                    fontWeight: 600,
+                    color: "var(--gold)",
+                  }}
+                >
+                  {fmt(selectedLoanDetail.totalPayment)}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Summary Cards */}
@@ -679,11 +1161,7 @@ function Relatorios() {
                         <button
                           className="btn btn-sm btn-outline"
                           onClick={() => {
-                            if (client) {
-                              generateLoanPDF(l, client);
-                            } else {
-                              alert("Cliente não encontrado");
-                            }
+                            handleExportProtocolPDF(l);
                           }}
                           title="Gerar e baixar PDF do contrato"
                           style={{

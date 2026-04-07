@@ -2,6 +2,7 @@
 import React, { useContext, useMemo, useState, useCallback } from "react";
 import { AppContext } from "../App";
 import { fmt, fmtDate, calcPMT, getClientName } from "../utils/helpers";
+import { buildInstallments } from "../utils/finance";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ function calcLateFees(amount, dueDate, penaltyRate = 2, moraRate = 0.033) {
   const mora = amount * (moraRate / 100) * daysLate;
   return { daysLate, penalty, mora, total: amount + penalty + mora };
 }
+
+// Using unified buildInstallments from finance.js
 
 // ── Payment Form ──────────────────────────────────────────────────────────────
 
@@ -212,7 +215,20 @@ const STATUS_OPTS = [
 ];
 
 function Cobrancas() {
-  const { loans, clients, editLoan, openModal, closeModal, addToast, settings, currentUser, userRole } = useContext(AppContext);
+  const {
+    loans,
+    clients,
+    employees,
+    editLoan,
+    openModal,
+    closeModal,
+    addToast,
+    settings,
+    currentUser,
+    userRole,
+    notifications,
+    markNotificationAsRead,
+  } = useContext(AppContext);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
 
@@ -230,7 +246,9 @@ function Cobrancas() {
   // Accessible data for employees
   const accessibleClients = useMemo(() => {
     if (userRole === "employee" && currentUser?.id) {
-      return clients.filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id);
+      return clients.filter(
+        (c) => c.created_by === currentUser.id || c.owner_id === currentUser.id,
+      );
     }
     return clients;
   }, [clients, currentUser, userRole]);
@@ -238,9 +256,12 @@ function Cobrancas() {
   const accessibleLoans = useMemo(() => {
     if (userRole === "employee" && currentUser?.id && clients) {
       const myClientIds = clients
-        .filter(c => c.created_by === currentUser.id || c.owner_id === currentUser.id)
-        .map(c => c.id);
-      return loans.filter(l => myClientIds.includes(l.client_id));
+        .filter(
+          (c) =>
+            c.created_by === currentUser.id || c.owner_id === currentUser.id,
+        )
+        .map((c) => c.id);
+      return loans.filter((l) => myClientIds.includes(l.client_id));
     }
     return loans;
   }, [loans, clients, currentUser, userRole]);
@@ -325,6 +346,18 @@ function Cobrancas() {
   }, [allInstallments]);
 
   const handleRegisterPayment = (inst) => {
+    // Verificar permissão para funcionários
+    if (userRole === "employee") {
+      const currentEmp = employees?.find((e) => e.id === currentUser?.id);
+      if (!currentEmp?.permissions?.can_register_payment) {
+        addToast(
+          "Você não tem permissão para registrar pagamentos. Solicite ao administrador.",
+          "error",
+        );
+        return;
+      }
+    }
+
     const loan = loans.find((l) => l.id === inst.loanId);
     if (!loan) return;
 
@@ -371,6 +404,20 @@ function Cobrancas() {
               };
               const updated = [paymentRecord, ...payments];
               savePayments(updated);
+
+              // Auto-dismiss related past notifications about this installment
+              const notifsToClear = notifications.filter(
+                (n) =>
+                  !n.read &&
+                  n.text &&
+                  n.text.includes(inst.client) &&
+                  (n.text.includes(`Parcela ${inst.installmentNo}`) ||
+                    n.text.includes("atrasad") ||
+                    n.text.includes("vencid")),
+              );
+              notifsToClear.forEach((n) => {
+                if (n.id) markNotificationAsRead(n.id);
+              });
 
               // Dispatch event to notify other pages
               window.dispatchEvent(
@@ -621,7 +668,10 @@ function Cobrancas() {
                       </td>
                       <td>
                         {inst.status !== "paid" &&
-                          inst.installmentNo === inst.loanPaid + 1 && (
+                          inst.installmentNo === inst.loanPaid + 1 &&
+                          (userRole === "admin" ||
+                            employees?.find((e) => e.id === currentUser?.id)
+                              ?.permissions?.can_register_payment) && (
                             <button
                               className="btn-icon"
                               title="Registrar Pagamento"
